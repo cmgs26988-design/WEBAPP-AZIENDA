@@ -1,0 +1,109 @@
+{
+  "entities": {
+    "Worker": {
+      "title": "Worker",
+      "description": "Represents a staff member/worker in the system.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "companyId": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "companyId"]
+    },
+    "TimeEntry": {
+      "title": "Time Entry",
+      "description": "Records hours worked by a worker on a specific site.",
+      "type": "object",
+      "properties": {
+        "workerCode": { "type": "string" },
+        "workerName": { "type": "string" },
+        "companyId": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "cantiere": { "type": "string" },
+        "intervento": { "type": "string" },
+        "ordinaria": { "type": "number" },
+        "straordinaria": { "type": "number" },
+        "viaggio": { "type": "number" },
+        "ferie": { "type": "number" },
+        "notes": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["workerCode", "date", "cantiere", "companyId"]
+    },
+    "MaterialRequest": {
+      "title": "Material Request",
+      "description": "Order for materials sent by a worker.",
+      "type": "object",
+      "properties": {
+        "workerId": { "type": "string" },
+        "workerName": { "type": "string" },
+        "companyId": { "type": "string" },
+        "cantiere": { "type": "string" },
+        "intervento": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "items": { "type": "array" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "object" },
+        "updatedAt": { "type": "object" }
+      },
+      "required": ["workerId", "cantiere", "items", "companyId"]
+    },
+    "ClockEvent": {
+      "title": "Clock Event",
+      "description": "Entrance or exit clock event.",
+      "type": "object",
+      "properties": {
+        "workerId": { "type": "string" },
+        "companyId": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "timestamp": { "type": "object" },
+        "type": { "type": "string", "enum": ["ENTRATA", "USCITA"] },
+        "location": { "type": "object" }
+      },
+      "required": ["workerId", "type", "timestamp", "companyId"]
+    }
+  },
+  "firestore": {
+    "/companies/{companyId}": {
+      "schema": {
+        "title": "Company",
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "adminEmail": { "type": "string" },
+          "createdAt": { "type": "object" }
+        }
+      },
+      "description": "Organization details."
+    },
+    "/workers/{workerId}": {
+      "schema": "Worker",
+      "description": "Collection of workers accessible by code."
+    },
+    "/timeEntries/{entryId}": {
+      "schema": "TimeEntry",
+      "description": "Daily work records."
+    },
+    "/materialRequests/{requestId}": {
+      "schema": "MaterialRequest",
+      "description": "Material orders."
+    },
+    "/clockEvents/{eventId}": {
+      "schema": "ClockEvent",
+      "description": "Clock in/out events."
+    },
+    "/admins/{adminId}": {
+      "schema": {
+        "title": "Admin",
+        "type": "object",
+        "properties": {}
+      },
+      "description": "Admin registry for RBAC."
+    }
+  }
+}

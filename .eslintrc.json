@@ -1,0 +1,14 @@
+{
+  "overrides": [
+    {
+      "files": ["*.rules"],
+      "plugins": ["@firebase/security-rules"],
+      "parser": "@firebase/eslint-plugin-security-rules/parser",
+      "rules": {}
+    }
+  ],
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "module"
+  }
+}

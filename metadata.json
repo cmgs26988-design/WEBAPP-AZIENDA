@@ -1,0 +1,6 @@
+{
+  "name": "LG INOX",
+  "description": "Applicazione multi-azienda per la gestione delle ore lavorative, timbratura dipendenti, richieste materiale e reportistica con isolamento dei dati per ogni ditta.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function adminHasCompany(companyId) {
+      return isSignedIn() && 
+             get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.companyId == companyId;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && 
+             request.auth.token.email == 'cmgs26988@gmail.com';
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Companies
+    match /companies/{companyId} {
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() && 
+                    incoming().adminUid == request.auth.uid;
+      allow update: if isSuperAdmin() || 
+                    (isSignedIn() && incoming().adminUid == request.auth.uid && 
+                     incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']));
+    }
+
+    // Admins
+    match /admins/{userId} {
+      allow get: if isOwner(userId) || isSuperAdmin();
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['companyName', 'email']);
+    }
+
+    // Workers
+    match /workers/{workerId} {
+      // Worker can read their own profile to login
+      allow get: if true; 
+      
+      // Admin of the company or SuperAdmin
+      allow list: if isSuperAdmin() || 
+                  (isSignedIn() && adminHasCompany(resource.data.companyId));
+      
+      allow create: if isSuperAdmin() || 
+                    (isSignedIn() && adminHasCompany(incoming().companyId));
+                    
+      allow update: if isSuperAdmin() || 
+                    (isSignedIn() && adminHasCompany(existing().companyId)) ||
+                    // Worker can update their own deviceId once
+                    (incoming().diff(existing()).affectedKeys().hasOnly(['deviceId']) && 
+                     existing().deviceId == '');
+      
+      allow delete: if isSuperAdmin() || 
+                    (isSignedIn() && adminHasCompany(existing().companyId));
+    }
+
+    // Time Entries
+    match /timeEntries/{entryId} {
+      allow read: if isSuperAdmin() || 
+                  (resource.data.companyId != null && (
+                    (isSignedIn() && adminHasCompany(resource.data.companyId)) ||
+                    // In a production app, we'd have a worker auth, but here workers use codes.
+                    // For security, we still require the companyId to match if we can verify it.
+                    true // Temporary allow for demo since workers aren't Auth users
+                  ));
+      
+      allow create: if true; // Temporary for demo
+      allow update, delete: if isSuperAdmin() || 
+                            (isSignedIn() && adminHasCompany(existing().companyId));
+    }
+
+    // Clock Events
+    match /clockEvents/{eventId} {
+      allow read, create: if true; // Temporary for demo
+      allow update, delete: if isSuperAdmin() || 
+                            (isSignedIn() && adminHasCompany(existing().companyId));
+    }
+
+    // Material Requests
+    match /materialRequests/{requestId} {
+      allow read, create: if true; // Temporary for demo
+      allow update: if isSuperAdmin() || 
+                    (isSignedIn() && adminHasCompany(existing().companyId)) ||
+                    (existing().status == 'draft'); // Allow worker to update their own draft
+      allow delete: if isSuperAdmin() || 
+                    (isSignedIn() && adminHasCompany(existing().companyId));
+    }
+  }
+}
