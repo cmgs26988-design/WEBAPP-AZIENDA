@@ -1,7 +1,7 @@
 export interface Worker {
   id: string; // The unique code
   name: string;
-  companyId: string;
+  azienda_id: string;
   photoUrl?: string;
   deviceId?: string;
   createdAt?: string;
@@ -38,7 +38,7 @@ export interface ClockEvent {
   id?: string;
   workerId: string;
   workerName: string;
-  companyId: string;
+  azienda_id: string;
   type: 'ENTRATA' | 'USCITA';
   timestamp: any;
   date: string;
@@ -49,7 +49,7 @@ export interface TimeEntry {
   date: string; // YYYY-MM-DD
   workerCode: string;
   workerName: string;
-  companyId: string;
+  azienda_id: string;
   cantiere: string;
   intervento: string;
   ordinaria: number;
@@ -79,7 +79,7 @@ export interface MaterialRequest {
   date: string;
   workerId: string;
   workerName: string;
-  companyId: string;
+  azienda_id: string;
   cantiere: string;
   intervento: string;
   items: MaterialRequestItem[];

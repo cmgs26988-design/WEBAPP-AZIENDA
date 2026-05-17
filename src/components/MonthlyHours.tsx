@@ -62,7 +62,7 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
     const q = query(
       collection(db, 'timeEntries'),
       where('workerCode', '==', worker.id),
-      where('companyId', '==', worker.companyId)
+      where('azienda_id', '==', worker.azienda_id)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -93,7 +93,7 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
       const qClock = query(
         collection(db, 'clockEvents'),
         where('workerId', '==', worker.id),
-        where('companyId', '==', worker.companyId)
+        where('azienda_id', '==', worker.azienda_id)
       );
       unsubscribeClock = onSnapshot(qClock, (snapshot) => {
         const events = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ClockEvent));
@@ -124,7 +124,7 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
       unsubscribe();
       unsubscribeClock();
     };
-  }, [worker.id, selectedMonth, selectedYear]);
+  }, [worker.id, worker.azienda_id, selectedMonth, selectedYear]);
 
   const handleDelete = async (id: string) => {
     setDeleting(true);

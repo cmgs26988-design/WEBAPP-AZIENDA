@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Clock, Calendar, LogOut, User, Hammer, ChevronLeft, Cylinder, Wrench } from 'lucide-react';
+import { Clock, Calendar, LogOut, User, Hammer, ChevronLeft, Cylinder, Wrench, Headset } from 'lucide-react';
 import { Worker } from '../types';
 import { MaterialRequest } from './MaterialRequest';
+import { FeedbackModal } from './FeedbackModal';
 
 interface WorkerDashboardProps {
   worker: Worker;
@@ -16,6 +17,7 @@ export const WorkerDashboard: React.FC<WorkerDashboardProps> = ({ worker, onLogo
   const navigate = useNavigate();
   const location = useLocation();
   const [view, setView] = useState<ViewType>((location.state as any)?.view || 'hub');
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
 
   if (view === 'materiale') {
     return <MaterialRequest worker={worker} onBack={() => setView('hub')} onLogout={onLogout} />;
@@ -42,11 +44,18 @@ export const WorkerDashboard: React.FC<WorkerDashboardProps> = ({ worker, onLogo
 
       <header className="flex flex-row items-center justify-between mb-8 sm:mb-16 bg-white p-6 sm:p-10 rounded-[1.5rem] sm:rounded-[3rem] border border-slate-200 shadow-sm gap-4">
         <div className="flex items-center gap-6">
-          <div className="w-16 h-16 sm:w-24 sm:h-24 bg-dark-blue rounded-2xl sm:rounded-3xl flex items-center justify-center text-white shadow-xl shadow-dark-blue/20 shrink-0">
-            <User className="w-8 h-8 sm:w-12 sm:h-12" />
+          <div className="w-16 h-16 sm:w-24 sm:h-24 bg-dark-blue rounded-2xl sm:rounded-3xl flex items-center justify-center text-white shadow-xl shadow-dark-blue/20 shrink-0 overflow-hidden">
+            {worker.photoUrl ? (
+              <img src={worker.photoUrl} alt={worker.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+            ) : (
+              <User className="w-8 h-8 sm:w-12 sm:h-12" />
+            )}
           </div>
           <div>
             <h2 className="text-2xl sm:text-4xl font-extrabold text-slate-900 tracking-tight leading-tight">{worker.name}</h2>
+            {worker.mansione && (
+              <p className="text-slate-500 font-bold uppercase tracking-widest text-xs sm:text-sm mt-1">{worker.mansione}</p>
+            )}
           </div>
         </div>
       </header>
@@ -58,42 +67,61 @@ export const WorkerDashboard: React.FC<WorkerDashboardProps> = ({ worker, onLogo
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="grid grid-cols-1 md:grid-cols-2 gap-8"
+            className="grid grid-cols-1 gap-6 sm:gap-8"
           >
             <motion.button
-              whileHover={{ y: -10, scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
+              whileHover={{ x: 5, scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
               onClick={() => setView('ore')}
-              className="group flex flex-col items-center justify-center p-12 bg-white rounded-[2.5rem] shadow-2xl border-4 border-transparent hover:border-dark-blue transition-all text-center relative overflow-hidden h-[300px] sm:h-[400px]"
+              className="group flex items-center p-6 sm:p-8 bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-xl border-2 border-transparent hover:border-dark-blue transition-all text-left relative overflow-hidden gap-6 sm:gap-8"
             >
-              <div className="p-8 bg-slate-100 group-hover:bg-dark-blue group-hover:text-white transition-all mb-8 rounded-[2rem] shadow-sm">
-                <Clock className="w-20 h-20 sm:w-32 sm:h-32 text-dark-blue group-hover:text-white transition-colors" />
+              <div className="p-5 sm:p-7 bg-slate-50 group-hover:bg-dark-blue group-hover:text-white transition-all rounded-2xl sm:rounded-[2rem] shadow-sm shrink-0">
+                <Clock className="w-10 h-10 sm:w-16 sm:h-16 text-dark-blue group-hover:text-white transition-colors" />
               </div>
-              <span className="text-3xl sm:text-5xl font-black text-slate-900 uppercase tracking-widest">ORE</span>
-              <p className="text-slate-500 mt-4 font-bold uppercase tracking-tight text-sm">Registrazione e Riepiloghi</p>
+              <div className="flex flex-col">
+                <span className="text-2xl sm:text-4xl font-black text-slate-900 uppercase tracking-widest leading-tight">ORE</span>
+                <p className="text-slate-500 mt-1 sm:mt-2 font-bold uppercase tracking-tight text-[10px] sm:text-sm">Registrazione e Riepiloghi</p>
+              </div>
             </motion.button>
 
             <motion.button
-              whileHover={{ y: -10, scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
+              whileHover={{ x: 5, scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
               onClick={() => setView('materiale')}
-              className="group flex flex-col items-center justify-center p-12 bg-white rounded-[2.5rem] shadow-2xl border-4 border-transparent hover:border-dark-blue transition-all text-center relative overflow-hidden h-[300px] sm:h-[400px]"
+              className="group flex items-center p-6 sm:p-8 bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-xl border-2 border-transparent hover:border-dark-blue transition-all text-left relative overflow-hidden gap-6 sm:gap-8"
             >
-              <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity rotate-12">
-                <Wrench className="w-32 h-32 sm:w-48 sm:h-48" />
+              <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity rotate-12">
+                <Wrench className="w-20 h-20 sm:w-32 sm:h-32" />
               </div>
-              <div className="p-8 bg-slate-100 group-hover:bg-dark-blue group-hover:text-white transition-all mb-8 rounded-[2rem] shadow-sm relative z-10">
-                <Cylinder className="w-20 h-20 sm:w-32 sm:h-32 text-dark-blue group-hover:text-white transition-colors" />
+              <div className="p-5 sm:p-7 bg-slate-50 group-hover:bg-dark-blue group-hover:text-white transition-all rounded-2xl sm:rounded-[2rem] shadow-sm shrink-0 relative z-10">
+                <Cylinder className="w-10 h-10 sm:w-16 sm:h-16 text-dark-blue group-hover:text-white transition-colors" />
               </div>
-              <span className="text-3xl sm:text-5xl font-black text-slate-900 uppercase tracking-widest relative z-10">MATERIALE</span>
-              <p className="text-slate-500 mt-4 font-bold uppercase tracking-tight text-sm relative z-10">Richiesta articoli ufficio</p>
+              <div className="flex flex-col relative z-10">
+                <span className="text-2xl sm:text-4xl font-black text-slate-900 uppercase tracking-widest leading-tight">MATERIALE</span>
+                <p className="text-slate-500 mt-1 sm:mt-2 font-bold uppercase tracking-tight text-[10px] sm:text-sm">Richiesta articoli ufficio</p>
+              </div>
+            </motion.button>
+
+            <motion.button
+              whileHover={{ x: 5, scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
+              onClick={() => setIsFeedbackOpen(true)}
+              className="group flex items-center p-6 sm:p-8 bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-xl border-2 border-transparent hover:border-dark-blue transition-all text-left relative overflow-hidden gap-6 sm:gap-8"
+            >
+              <div className="p-5 sm:p-7 bg-slate-50 group-hover:bg-dark-blue group-hover:text-white transition-all rounded-2xl sm:rounded-[2rem] shadow-sm shrink-0 relative z-10">
+                <Headset className="w-10 h-10 sm:w-16 sm:h-16 text-dark-blue group-hover:text-white transition-colors" />
+              </div>
+              <div className="flex flex-col relative z-10">
+                <span className="text-2xl sm:text-4xl font-black text-slate-900 uppercase tracking-widest leading-tight">FEEDBACK</span>
+                <p className="text-slate-500 mt-1 sm:mt-2 font-bold uppercase tracking-tight text-[10px] sm:text-sm">Segnala problemi o migliorie</p>
+              </div>
             </motion.button>
 
             <motion.button
               whileHover={{ y: -5, scale: 1.01 }}
               whileTap={{ scale: 0.99 }}
               onClick={onLogout}
-              className="md:col-span-2 group flex items-center justify-center gap-6 p-8 bg-red-600 text-white rounded-[2rem] shadow-2xl hover:bg-red-700 transition-all text-center relative overflow-hidden mt-4"
+              className="group flex items-center justify-center gap-6 p-8 bg-red-600 text-white rounded-[2rem] shadow-2xl hover:bg-red-700 transition-all text-center relative overflow-hidden mt-4"
             >
               <LogOut className="w-8 h-8 relative z-10" />
               <span className="text-2xl font-black uppercase tracking-[0.2em] relative z-10">ESCI DAL SISTEMA</span>
@@ -142,6 +170,13 @@ export const WorkerDashboard: React.FC<WorkerDashboardProps> = ({ worker, onLogo
           </motion.div>
         )}
       </AnimatePresence>
+
+      <FeedbackModal 
+        isOpen={isFeedbackOpen} 
+        onClose={() => setIsFeedbackOpen(false)} 
+        userEmail={worker.name}
+        aziendaId={worker.azienda_id} 
+      />
     </div>
   );
 };

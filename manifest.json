@@ -1,21 +1,21 @@
 {
-  "short_name": "LG INOX",
-  "name": "LG INOX",
+  "short_name": "OPTIME RDM",
+  "name": "OPTIME RDM",
   "icons": [
     {
-      "src": "https://i.ibb.co/m5GbpFJy/LOGO-LG-INOX-2025-NS-01.png",
+      "src": "https://i.ibb.co/5xkbm2kh/Gemini-Generated-Image-3yyt6f3yyt6f3yyt.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "https://i.ibb.co/m5GbpFJy/LOGO-LG-INOX-2025-NS-01.png",
+      "src": "https://i.ibb.co/5xkbm2kh/Gemini-Generated-Image-3yyt6f3yyt6f3yyt.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
     }
   ],
-  "start_url": "https://registro-ore-912609330611.europe-west2.run.app/",
+  "start_url": ".",
   "display": "standalone",
   "theme_color": "#000000",
   "background_color": "#ffffff"

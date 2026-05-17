@@ -7,13 +7,13 @@
       "properties": {
         "id": { "type": "string" },
         "name": { "type": "string" },
-        "companyId": { "type": "string" },
+        "azienda_id": { "type": "string" },
         "photoUrl": { "type": "string" },
         "deviceId": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "name", "companyId"]
+      "required": ["id", "name", "azienda_id"]
     },
     "TimeEntry": {
       "title": "Time Entry",
@@ -22,7 +22,7 @@
       "properties": {
         "workerCode": { "type": "string" },
         "workerName": { "type": "string" },
-        "companyId": { "type": "string" },
+        "azienda_id": { "type": "string" },
         "date": { "type": "string", "format": "date" },
         "cantiere": { "type": "string" },
         "intervento": { "type": "string" },
@@ -33,7 +33,7 @@
         "notes": { "type": "object" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["workerCode", "date", "cantiere", "companyId"]
+      "required": ["workerCode", "date", "cantiere", "azienda_id"]
     },
     "MaterialRequest": {
       "title": "Material Request",
@@ -42,7 +42,7 @@
       "properties": {
         "workerId": { "type": "string" },
         "workerName": { "type": "string" },
-        "companyId": { "type": "string" },
+        "azienda_id": { "type": "string" },
         "cantiere": { "type": "string" },
         "intervento": { "type": "string" },
         "date": { "type": "string", "format": "date" },
@@ -51,7 +51,7 @@
         "createdAt": { "type": "object" },
         "updatedAt": { "type": "object" }
       },
-      "required": ["workerId", "cantiere", "items", "companyId"]
+      "required": ["workerId", "cantiere", "items", "azienda_id"]
     },
     "ClockEvent": {
       "title": "Clock Event",
@@ -59,17 +59,54 @@
       "type": "object",
       "properties": {
         "workerId": { "type": "string" },
-        "companyId": { "type": "string" },
+        "azienda_id": { "type": "string" },
         "date": { "type": "string", "format": "date" },
         "timestamp": { "type": "object" },
         "type": { "type": "string", "enum": ["ENTRATA", "USCITA"] },
         "location": { "type": "object" }
       },
-      "required": ["workerId", "type", "timestamp", "companyId"]
+      "required": ["workerId", "type", "timestamp", "azienda_id"]
+    },
+    "AuthorizedUser": {
+      "title": "Authorized User",
+      "description": "User authorized to access the admin panel.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "azienda_id": { "type": "string" },
+        "ruolo": { "type": "string" },
+        "createdAt": { "type": "object" }
+      },
+      "required": ["email", "azienda_id", "ruolo"]
+    },
+    "Feedback": {
+      "title": "Feedback",
+      "description": "User feedback, bug reports or improvements.",
+      "type": "object",
+      "properties": {
+        "tipo": { "type": "string", "enum": ["Bug/Errore", "Miglioria"] },
+        "titolo": { "type": "string" },
+        "descrizione": { "type": "string" },
+        "priorita": { "type": "string", "enum": ["Alta", "Media", "Bassa"] },
+        "status": { "type": "string", "enum": ["Aperto", "Risolto"] },
+        "user": { "type": "string" },
+        "azienda_id": { "type": "string" },
+        "createdAt": { "type": "object" },
+        "updatedAt": { "type": "object" }
+      },
+      "required": ["tipo", "titolo", "descrizione", "priorita", "status", "user", "azienda_id"]
     }
   },
   "firestore": {
-    "/companies/{companyId}": {
+    "/feedback/{feedbackId}": {
+      "schema": "Feedback",
+      "description": "User feedback and bug reports."
+    },
+    "/utenti_autorizzati/{docId}": {
+      "schema": "AuthorizedUser",
+      "description": "List of emails authorized to access specific companies."
+    },
+    "/companies/{azienda_id}": {
       "schema": {
         "title": "Company",
         "type": "object",

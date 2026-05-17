@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, fetchWithRetry } from '../lib/firebase';
 import { collection, addDoc, updateDoc, doc, serverTimestamp, query, where, getDocs, orderBy, onSnapshot, limit } from 'firebase/firestore';
 import { format, differenceInMinutes } from 'date-fns';
 import { it } from 'date-fns/locale';
@@ -47,7 +47,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
       const q = query(
         collection(db, 'clockEvents'),
         where('workerId', '==', worker.id),
-        where('companyId', '==', worker.companyId),
+        where('azienda_id', '==', worker.azienda_id),
         where('date', '==', today)
       );
 
@@ -73,7 +73,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
 
       return () => unsubscribe();
     }
-  }, [isMaurizio, worker.id]);
+  }, [isMaurizio, worker.id, worker.azienda_id]);
 
   useEffect(() => {
     if (editingEntry) {
@@ -119,7 +119,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
       const type = (!lastAction || lastAction.type === 'USCITA') ? 'ENTRATA' : 'USCITA';
       const eventData: any = {
         workerId: worker.id,
-        companyId: worker.companyId,
+        azienda_id: worker.azienda_id,
         workerName: worker.name,
         type,
         timestamp: serverTimestamp(),
@@ -161,10 +161,10 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
         const q = query(
           collection(db, 'timeEntries'),
           where('workerCode', '==', worker.id),
-          where('companyId', '==', worker.companyId),
+          where('azienda_id', '==', worker.azienda_id),
           where('date', '==', formData.date)
         );
-        const querySnapshot = await getDocs(q);
+        const querySnapshot = await fetchWithRetry(() => getDocs(q));
         if (!querySnapshot.empty) {
           setError('Hai già inserito un report per questa data. Se devi fare modifiche, contatta l\'amministratore.');
           setLoading(false);
@@ -175,7 +175,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
       const entryData: any = {
         date: formData.date,
         workerCode: worker.id,
-        companyId: worker.companyId,
+        azienda_id: worker.azienda_id,
         workerName: worker.name || 'Dipendente Senza Nome',
         cantiere: formData.cantiere,
         intervento: formData.intervento,

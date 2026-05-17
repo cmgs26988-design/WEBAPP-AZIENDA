@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, fetchWithRetry } from '../lib/firebase';
 import { 
   collection, 
   addDoc, 
@@ -549,7 +549,7 @@ export const MaterialRequest: React.FC<MaterialRequestProps> = ({ worker, onBack
       const requestData: any = {
         date: formData.date || new Date().toISOString().split('T')[0],
         workerId: worker.id,
-        companyId: worker.companyId,
+        azienda_id: worker.azienda_id,
         workerName: worker.name || 'Dipendente',
         cantiere: formData.cantiere || 'Senza Nome',
         intervento: formData.intervento || '-',
@@ -688,22 +688,22 @@ export const MaterialRequest: React.FC<MaterialRequestProps> = ({ worker, onBack
       let q = query(
         collection(db, 'materialRequests'),
         where('workerId', '==', worker.id),
-        where('companyId', '==', worker.companyId),
+        where('azienda_id', '==', worker.azienda_id),
         orderBy('createdAt', 'desc')
       );
       
       let snapshot;
       try {
-        snapshot = await getDocs(q);
+        snapshot = await fetchWithRetry(() => getDocs(q));
       } catch (innerErr: any) {
         // Fallback if index missing or other sort error
         console.warn('Sort query failed, falling back to simple query', innerErr);
         q = query(
           collection(db, 'materialRequests'),
           where('workerId', '==', worker.id),
-          where('companyId', '==', worker.companyId)
+          where('azienda_id', '==', worker.azienda_id)
         );
-        snapshot = await getDocs(q);
+        snapshot = await fetchWithRetry(() => getDocs(q));
       }
 
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as MaterialRequestType));

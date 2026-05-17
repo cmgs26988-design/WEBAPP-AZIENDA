@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, IS_LG_ENV, DEFAULT_AZIENDA_ID } from '../lib/firebase';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, orderBy, serverTimestamp, where } from 'firebase/firestore';
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, getDaysInMonth } from 'date-fns';
 import { it } from 'date-fns/locale';
@@ -9,25 +9,28 @@ import {
   FileBox, Download, LogOut, ChevronRight, X, Clock,
   CheckCircle2, AlertCircle, LayoutGrid, Edit2, Smartphone,
   ShoppingCart, Truck, Check, Cylinder, ArrowLeft, Save, Lock, UserPlus, Loader2,
-  Eye, EyeOff
+  Eye, EyeOff, Headset
 } from 'lucide-react';
 import { Worker, TimeEntry, MaterialRequest, ClockEvent } from '../types';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { formatNumber } from '../lib/format';
+import { FeedbackModal } from './FeedbackModal';
+import { auth } from '../lib/firebase';
 
 interface AdminDashboardProps {
   onLogout: () => void;
-  adminCompanyId: string;
+  adminAziendaId: string;
 }
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminCompanyId }) => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminAziendaId }) => {
   const [activeTab, setActiveTab] = useState<'entries' | 'workers' | 'material'>('entries');
   const [filterMode, setFilterMode] = useState<'dipendente' | 'mese' | 'settimana' | 'giorno'>('dipendente');
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [clockEvents, setClockEvents] = useState<ClockEvent[]>([]);
   const [materialRequests, setMaterialRequests] = useState<MaterialRequest[]>([]);
+  const [companyName, setCompanyName] = useState('OPTIME RDM');
   const [loading, setLoading] = useState(true);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
@@ -54,6 +57,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
   const [resettingDevice, setResettingDevice] = useState(false);
   const [visibleCodes, setVisibleCodes] = useState<Record<string, boolean>>({});
   const [showWorkerFormCode, setShowWorkerFormCode] = useState(false);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
 
   // Month select options
   const monthOptions = Array.from({ length: 12 }, (_, i) => {
@@ -73,9 +77,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
     }, 8000);
     
     // Real-time workers
-    const workersQuery = adminCompanyId === 'SUPERADMIN' 
+    const workersQuery = adminAziendaId === 'SUPERADMIN' 
       ? collection(db, 'workers')
-      : query(collection(db, 'workers'), where('companyId', '==', adminCompanyId));
+      : query(collection(db, 'workers'), where('azienda_id', '==', adminAziendaId));
 
     const unsubWorkers = onSnapshot(workersQuery, (snapshot) => {
       console.log('Admin Workers Snapshot size:', snapshot.size);
@@ -87,9 +91,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
     });
 
     // Real-time entries
-    const entriesQuery = adminCompanyId === 'SUPERADMIN'
+    const entriesQuery = adminAziendaId === 'SUPERADMIN'
       ? query(collection(db, 'timeEntries'))
-      : query(collection(db, 'timeEntries'), where('companyId', '==', adminCompanyId));
+      : query(collection(db, 'timeEntries'), where('azienda_id', '==', adminAziendaId));
 
     const unsubEntries = onSnapshot(entriesQuery, (snapshot) => {
       console.log('Admin Entries Snapshot size:', snapshot.size);
@@ -103,19 +107,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
     });
 
     // Real-time material requests
-    const materialQuery = adminCompanyId === 'SUPERADMIN'
-      ? query(collection(db, 'materialRequests'), orderBy('createdAt', 'desc'))
-      : query(collection(db, 'materialRequests'), where('companyId', '==', adminCompanyId), orderBy('createdAt', 'desc'));
+    const materialQuery = adminAziendaId === 'SUPERADMIN'
+      ? collection(db, 'materialRequests')
+      : query(collection(db, 'materialRequests'), where('azienda_id', '==', adminAziendaId));
 
     const unsubMaterial = onSnapshot(materialQuery, (snapshot) => {
-      setMaterialRequests(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as MaterialRequest)));
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as MaterialRequest));
+      // Sort in-memory to avoid requiring a composite index
+      const sortedData = data.sort((a, b) => {
+        const timeA = a.createdAt?.seconds || 0;
+        const timeB = b.createdAt?.seconds || 0;
+        return timeB - timeA;
+      });
+      setMaterialRequests(sortedData);
     }, (err) => {
       handleFirestoreError(err, OperationType.GET, 'materialRequests');
     });
 
-    const clockQuery = adminCompanyId === 'SUPERADMIN'
+    const clockQuery = adminAziendaId === 'SUPERADMIN'
       ? collection(db, 'clockEvents')
-      : query(collection(db, 'clockEvents'), where('companyId', '==', adminCompanyId));
+      : query(collection(db, 'clockEvents'), where('azienda_id', '==', adminAziendaId));
 
     const unsubClock = onSnapshot(clockQuery, (snapshot) => {
       setClockEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ClockEvent)));
@@ -123,12 +134,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
       handleFirestoreError(err, OperationType.GET, 'clockEvents');
     });
 
+    // Real-time company name
+    let unsubCompany = () => {};
+    if (adminAziendaId !== 'SUPERADMIN') {
+      unsubCompany = onSnapshot(doc(db, 'companies', adminAziendaId), (snapshot) => {
+        if (snapshot.exists()) {
+          setCompanyName(snapshot.data().name);
+        }
+      });
+    } else {
+      setCompanyName('PANNELLO SUPERADMIN');
+    }
+
     return () => {
       clearTimeout(loadTimer);
       unsubWorkers();
       unsubEntries();
       unsubMaterial();
       unsubClock();
+      unsubCompany();
     };
   }, []);
 
@@ -170,12 +194,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
 
       const existingWorker = workers.find(w => w.id === (editingWorkerId || trimmedCode));
 
+      // Determiniamo l'azienda_id corretto:
+      // Se siamo in LG INOX, forziamo 'lg_inox'.
+      // Altrimenti usiamo l'ID dell'admin, a meno che non sia SUPERADMIN (in quel caso usiamo il default di test).
+      const effectiveAziendaId = IS_LG_ENV 
+        ? 'lg_inox' 
+        : (adminAziendaId === 'SUPERADMIN' ? DEFAULT_AZIENDA_ID : adminAziendaId);
+
       await setDoc(doc(db, 'workers', trimmedCode), { 
         id: trimmedCode,
         name: trimmedName,
         photoUrl: newWorkerPhoto.trim(),
         deviceId: existingWorker?.deviceId || '',
-        companyId: adminCompanyId,
+        azienda_id: effectiveAziendaId,
         createdAt: editingWorkerId ? existingWorker?.createdAt || new Date().toISOString() : new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         ...workerFormData
@@ -249,7 +280,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
 
     // Logo handling with aspect ratio preservation
     try {
-      const logoUrl = 'https://i.ibb.co/m5GbpFJy/LOGO-LG-INOX-2025-NS-01.png';
+      const logoUrl = 'https://i.ibb.co/5xkbm2kh/Gemini-Generated-Image-3yyt6f3yyt6f3yyt.png';
       await new Promise((resolve) => {
         const img = new Image();
         img.crossOrigin = 'Anonymous';
@@ -271,7 +302,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
     doc.setFontSize(14);
     doc.setTextColor(30, 41, 59); // slate-800
     doc.setFont('helvetica', 'bold');
-    doc.text('LG INOX di Lauricella Giuseppe', 72, 18);
+    doc.text(companyName, 72, 18);
     
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
@@ -348,7 +379,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
 
     // Logo handling with aspect ratio preservation
     try {
-      const logoUrl = 'https://i.ibb.co/m5GbpFJy/LOGO-LG-INOX-2025-NS-01.png';
+      const logoUrl = 'https://i.ibb.co/5xkbm2kh/Gemini-Generated-Image-3yyt6f3yyt6f3yyt.png';
       await new Promise((resolve) => {
         const img = new Image();
         img.crossOrigin = 'Anonymous';
@@ -370,7 +401,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
     doc.setFontSize(14);
     doc.setTextColor(30, 41, 59); // slate-800
     doc.setFont('helvetica', 'bold');
-    doc.text('LG INOX di Lauricella Giuseppe', 72, 18);
+    doc.text(companyName, 72, 18);
     
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
@@ -485,7 +516,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
     
     // Logo
     try {
-      const logoUrl = 'https://i.ibb.co/m5GbpFJy/LOGO-LG-INOX-2025-NS-01.png';
+      const logoUrl = 'https://i.ibb.co/5xkbm2kh/Gemini-Generated-Image-3yyt6f3yyt6f3yyt.png';
       await new Promise((resolve) => {
         const img = new Image();
         img.crossOrigin = 'Anonymous';
@@ -504,7 +535,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
     // Header
     pdfDoc.setFontSize(14);
     pdfDoc.setFont('helvetica', 'bold');
-    pdfDoc.text('LG INOX di Lauricella Giuseppe', 72, 18);
+    pdfDoc.text(companyName, 72, 18);
     pdfDoc.setFontSize(8);
     pdfDoc.setFont('helvetica', 'normal');
     pdfDoc.text('Via Degli Alpini, 2/1 – 31050 Povegliano (TV)', 72, 23);
@@ -591,7 +622,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
     const creationDate = format(new Date(), 'dd/MM/yyyy HH:mm', { locale: it });
 
     try {
-      const logoUrl = 'https://i.ibb.co/m5GbpFJy/LOGO-LG-INOX-2025-NS-01.png';
+      const logoUrl = 'https://i.ibb.co/5xkbm2kh/Gemini-Generated-Image-3yyt6f3yyt6f3yyt.png';
       await new Promise((resolve) => {
         const img = new Image();
         img.crossOrigin = 'Anonymous';
@@ -612,7 +643,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
     doc.setFontSize(14);
     doc.setTextColor(30, 41, 59);
     doc.setFont('helvetica', 'bold');
-    doc.text('LG INOX di Lauricella Giuseppe', 72, 18);
+    doc.text(companyName, 72, 18);
     
     doc.setFontSize(8);
     doc.setFont('helvetica', 'normal');
@@ -676,7 +707,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
         doc.setFontSize(10);
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(30, 41, 59);
-        doc.text('LG INOX di Lauricella Giuseppe - Riepilogo Mensile', 14, 15);
+        doc.text(`${companyName} - Riepilogo Mensile`, 14, 15);
         doc.line(14, 18, 283, 18);
         currentY = 25;
       }
@@ -952,7 +983,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
     
     // Logo
     try {
-      const logoUrl = 'https://i.ibb.co/m5GbpFJy/LOGO-LG-INOX-2025-NS-01.png';
+      const logoUrl = 'https://i.ibb.co/5xkbm2kh/Gemini-Generated-Image-3yyt6f3yyt6f3yyt.png';
       await new Promise((resolve) => {
         const img = new Image();
         img.crossOrigin = 'Anonymous';
@@ -970,7 +1001,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
 
     pdfDoc.setFontSize(14);
     pdfDoc.setFont('helvetica', 'bold');
-    pdfDoc.text('LG INOX di Lauricella Giuseppe', 70, 18);
+    pdfDoc.text(companyName, 70, 18);
     pdfDoc.setFontSize(8);
     pdfDoc.setFont('helvetica', 'normal');
     pdfDoc.text('Via Degli Alpini, 2/1 – 31050 Povegliano (TV)', 70, 23);
@@ -1064,9 +1095,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
         <div className="p-8 border-b border-white/5">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-dark-blue rounded-xl flex items-center justify-center text-white shadow-lg">
-              <Clock className="w-6 h-6" />
+              <img src="https://i.ibb.co/5xkbm2kh/Gemini-Generated-Image-3yyt6f3yyt6f3yyt.png" alt="Logo" className="w-8 h-8 object-contain bg-white rounded-lg p-0.5" />
             </div>
-            <h1 className="text-xl font-black tracking-tighter uppercase italic">LG <span className="text-dark-blue">INOX</span></h1>
+            <h1 className="text-xl font-black tracking-tighter uppercase italic">OPTIME <span className="text-dark-blue">RDM</span></h1>
           </div>
         </div>
         <nav className="flex-1 p-6 space-y-3">
@@ -1091,6 +1122,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
             <ShoppingCart className="w-5 h-5" />
             <span>Ordini Materiale</span>
           </button>
+          <button 
+            onClick={() => setIsFeedbackOpen(true)}
+            className="w-full flex items-center gap-4 px-5 py-4 text-slate-400 hover:text-dark-blue hover:bg-white/5 rounded-2xl transition-all duration-300 font-bold uppercase tracking-widest text-xs"
+          >
+            <Headset className="w-5 h-5" />
+            <span>Feedback</span>
+          </button>
         </nav>
         <div className="p-6 border-t border-white/5">
           <button 
@@ -1109,16 +1147,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
         <header className="h-20 bg-white border-b border-slate-200 px-10 flex items-center justify-between shrink-0 z-10 shadow-sm">
           <div className="flex items-center gap-4">
             <div className="lg:hidden w-8 h-8 bg-dark-blue rounded-lg flex items-center justify-center text-white mr-2">
-              <Clock className="w-5 h-5" />
+              <img src="https://i.ibb.co/5xkbm2kh/Gemini-Generated-Image-3yyt6f3yyt6f3yyt.png" alt="Logo" className="w-6 h-6 object-contain bg-white rounded-md" />
             </div>
             <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
               {activeTab === 'entries' ? 'Monitoraggio Ore Lavorative' : activeTab === 'material' ? 'Gestione Ordini Materiale' : 'Anagrafica Dipendenti'}
             </h2>
           </div>
           <div className="flex items-center gap-6">
-            <div className="flex flex-col items-end hidden md:flex">
-              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">AMMINISTRZIONE</span>
-              <span className="text-sm font-bold text-slate-700">Root Access</span>
+            <div className="flex flex-col items-end hidden md:flex text-right">
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{companyName}</span>
+              <span className="text-sm font-bold text-slate-700">Amministratore</span>
             </div>
           </div>
         </header>
@@ -1145,6 +1183,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
           >
             <ShoppingCart className="w-6 h-6" />
             <span className="text-[9px] font-black uppercase tracking-widest">Ordini</span>
+          </button>
+          <button 
+            onClick={() => setIsFeedbackOpen(true)}
+            className="flex flex-col items-center gap-1 p-3 rounded-xl text-slate-500 transition-all"
+          >
+            <Headset className="w-6 h-6" />
+            <span className="text-[9px] font-black uppercase tracking-widest">FB</span>
           </button>
           <button 
             onClick={onLogout}
@@ -1253,7 +1298,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
                             <Users className="w-5 h-5" />
                           )}
                         </div>
-                        <span className="font-extrabold text-slate-800 uppercase tracking-tight">LG INOX: {workerFilter}</span>
+                        <span className="font-extrabold text-slate-800 uppercase tracking-tight">{companyName}: {workerFilter}</span>
                       </div>
                       <button 
                         onClick={() => setSelectedWorkerId(null)}
@@ -2216,6 +2261,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminC
           </div>
         )}
       </AnimatePresence>
+
+      <FeedbackModal 
+        isOpen={isFeedbackOpen} 
+        onClose={() => setIsFeedbackOpen(false)} 
+        userEmail={auth.currentUser?.email || 'admin'}
+        aziendaId={adminAziendaId} 
+      />
     </div>
   );
 };
