@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { db, handleFirestoreError, OperationType, fetchWithRetry } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, fetchWithRetry, IS_TEST_PROJECT } from '../lib/firebase';
 import { 
   collection, 
   addDoc, 
@@ -685,12 +685,18 @@ export const MaterialRequest: React.FC<MaterialRequestProps> = ({ worker, onBack
     setLoading(true);
     setError('');
     try {
-      let q = query(
-        collection(db, 'materialRequests'),
-        where('workerId', '==', worker.id),
-        where('azienda_id', '==', worker.azienda_id),
-        orderBy('createdAt', 'desc')
-      );
+      let q = (IS_TEST_PROJECT)
+        ? query(
+            collection(db, 'materialRequests'),
+            where('workerId', '==', worker.id),
+            orderBy('createdAt', 'desc')
+          )
+        : query(
+            collection(db, 'materialRequests'),
+            where('workerId', '==', worker.id),
+            where('azienda_id', '==', worker.azienda_id),
+            orderBy('createdAt', 'desc')
+          );
       
       let snapshot;
       try {
@@ -698,15 +704,34 @@ export const MaterialRequest: React.FC<MaterialRequestProps> = ({ worker, onBack
       } catch (innerErr: any) {
         // Fallback if index missing or other sort error
         console.warn('Sort query failed, falling back to simple query', innerErr);
-        q = query(
-          collection(db, 'materialRequests'),
-          where('workerId', '==', worker.id),
-          where('azienda_id', '==', worker.azienda_id)
-        );
+        q = (IS_TEST_PROJECT)
+          ? query(
+              collection(db, 'materialRequests'),
+              where('workerId', '==', worker.id)
+            )
+          : query(
+              collection(db, 'materialRequests'),
+              where('workerId', '==', worker.id),
+              where('azienda_id', '==', worker.azienda_id)
+            );
         snapshot = await fetchWithRetry(() => getDocs(q));
       }
 
-      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as MaterialRequestType));
+      if (!snapshot || !snapshot.docs) {
+        throw new Error("Impossibile recuperare le richieste materiali.");
+      }
+
+      const docs: MaterialRequestType[] = [];
+      for (const doc of snapshot.docs) {
+        try {
+          if (!doc || !doc.data || typeof doc.data !== 'function') continue;
+          const data = doc.data();
+          if (!data) continue;
+          docs.push({ id: doc.id, ...data } as MaterialRequestType);
+        } catch (e) {
+          console.error("Error mapping document in MaterialRequest:", e);
+        }
+      }
       
       // Sort manually if fallback was used
       if (docs.length > 0 && !docs[0].createdAt) {

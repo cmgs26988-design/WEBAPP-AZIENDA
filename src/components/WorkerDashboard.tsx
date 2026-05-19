@@ -4,23 +4,32 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Clock, Calendar, LogOut, User, Hammer, ChevronLeft, Cylinder, Wrench, Headset } from 'lucide-react';
 import { Worker } from '../types';
 import { MaterialRequest } from './MaterialRequest';
-import { FeedbackModal } from './FeedbackModal';
+import { FeedbackModule } from './FeedbackModule';
 
 interface WorkerDashboardProps {
   worker: Worker;
   onLogout: () => void;
 }
 
-type ViewType = 'hub' | 'ore' | 'materiale';
+type ViewType = 'hub' | 'ore' | 'materiale' | 'feedback';
 
 export const WorkerDashboard: React.FC<WorkerDashboardProps> = ({ worker, onLogout }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [view, setView] = useState<ViewType>((location.state as any)?.view || 'hub');
-  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
 
   if (view === 'materiale') {
     return <MaterialRequest worker={worker} onBack={() => setView('hub')} onLogout={onLogout} />;
+  }
+
+  if (view === 'feedback') {
+    return (
+      <FeedbackModule 
+        onBack={() => setView('hub')} 
+        userEmail={worker.name} 
+        aziendaId={worker.azienda_id} 
+      />
+    );
   }
 
   return (
@@ -80,7 +89,7 @@ export const WorkerDashboard: React.FC<WorkerDashboardProps> = ({ worker, onLogo
               </div>
               <div className="flex flex-col">
                 <span className="text-2xl sm:text-4xl font-black text-slate-900 uppercase tracking-widest leading-tight">ORE</span>
-                <p className="text-slate-500 mt-1 sm:mt-2 font-bold uppercase tracking-tight text-[10px] sm:text-sm">Registrazione e Riepiloghi</p>
+                <p className="text-slate-500 mt-1 sm:mt-2 font-bold uppercase tracking-tight text-xs sm:text-base">Registrazione e Riepiloghi</p>
               </div>
             </motion.button>
 
@@ -98,14 +107,14 @@ export const WorkerDashboard: React.FC<WorkerDashboardProps> = ({ worker, onLogo
               </div>
               <div className="flex flex-col relative z-10">
                 <span className="text-2xl sm:text-4xl font-black text-slate-900 uppercase tracking-widest leading-tight">MATERIALE</span>
-                <p className="text-slate-500 mt-1 sm:mt-2 font-bold uppercase tracking-tight text-[10px] sm:text-sm">Richiesta articoli ufficio</p>
+                <p className="text-slate-500 mt-1 sm:mt-2 font-bold uppercase tracking-tight text-xs sm:text-base">Richiesta articoli ufficio</p>
               </div>
             </motion.button>
 
             <motion.button
               whileHover={{ x: 5, scale: 1.01 }}
               whileTap={{ scale: 0.99 }}
-              onClick={() => setIsFeedbackOpen(true)}
+              onClick={() => setView('feedback')}
               className="group flex items-center p-6 sm:p-8 bg-white rounded-[1.5rem] sm:rounded-[2.5rem] shadow-xl border-2 border-transparent hover:border-dark-blue transition-all text-left relative overflow-hidden gap-6 sm:gap-8"
             >
               <div className="p-5 sm:p-7 bg-slate-50 group-hover:bg-dark-blue group-hover:text-white transition-all rounded-2xl sm:rounded-[2rem] shadow-sm shrink-0 relative z-10">
@@ -113,7 +122,7 @@ export const WorkerDashboard: React.FC<WorkerDashboardProps> = ({ worker, onLogo
               </div>
               <div className="flex flex-col relative z-10">
                 <span className="text-2xl sm:text-4xl font-black text-slate-900 uppercase tracking-widest leading-tight">FEEDBACK</span>
-                <p className="text-slate-500 mt-1 sm:mt-2 font-bold uppercase tracking-tight text-[10px] sm:text-sm">Segnala problemi o migliorie</p>
+                <p className="text-slate-500 mt-1 sm:mt-2 font-bold uppercase tracking-tight text-xs sm:text-base">Segnala problemi o migliorie</p>
               </div>
             </motion.button>
 
@@ -170,13 +179,6 @@ export const WorkerDashboard: React.FC<WorkerDashboardProps> = ({ worker, onLogo
           </motion.div>
         )}
       </AnimatePresence>
-
-      <FeedbackModal 
-        isOpen={isFeedbackOpen} 
-        onClose={() => setIsFeedbackOpen(false)} 
-        userEmail={worker.name}
-        aziendaId={worker.azienda_id} 
-      />
     </div>
   );
 };

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, query, where, onSnapshot, orderBy, deleteDoc, doc, Timestamp } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType, IS_LG_ENV, IS_TEST_PROJECT } from '../lib/firebase';
+import { collection, query, where, onSnapshot, orderBy, deleteDoc, doc, Timestamp, getDocs } from 'firebase/firestore';
 import { format, startOfMonth, endOfMonth, isBefore, addDays, differenceInMinutes } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { AnimatePresence, motion } from 'motion/react';
@@ -22,7 +22,7 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
   const [allEntries, setAllEntries] = useState<TimeEntry[]>([]);
   const [clockEvents, setClockEvents] = useState<ClockEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const isMaurizio = worker.name === 'Maurizio Grollo';
+  const isClockingWorker = worker?.name === 'Maurizio Grollo' || worker?.name === 'Giulio Timbro';
   const [canGeneratePDF, setCanGeneratePDF] = useState(false);
   const [selectedEntryDetail, setSelectedEntryDetail] = useState<TimeEntry | null>(null);
   const [showPdfOptions, setShowPdfOptions] = useState(false);
@@ -59,14 +59,42 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
     const currentYear = now.getFullYear();
     const visibilityStartYear = (now.getMonth() === 0) ? currentYear - 1 : currentYear;
 
-    const q = query(
-      collection(db, 'timeEntries'),
-      where('workerCode', '==', worker.id),
-      where('azienda_id', '==', worker.azienda_id)
-    );
+    const q = (IS_LG_ENV && !IS_TEST_PROJECT) 
+      ? query(
+          collection(db, 'timeEntries'),
+          where('workerCode', '==', worker.id),
+          where('azienda_id', '==', worker.azienda_id)
+        )
+      : query(
+          collection(db, 'timeEntries'),
+          where('workerCode', '==', worker.id)
+        );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TimeEntry));
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      console.log('Dati estratti per PDF:', querySnapshot?.docs);
+      if (!querySnapshot || !querySnapshot.docs) {
+        setLoading(false);
+        return;
+      }
+      
+      if (querySnapshot.empty) {
+        setAllEntries([]);
+        setEntries([]);
+        setLoading(false);
+        return;
+      }
+
+      const data: TimeEntry[] = [];
+      for (const doc of querySnapshot.docs) {
+        try {
+          if (!doc || !doc.data || typeof doc.data !== 'function') continue;
+          const docData = doc.data();
+          if (!docData) continue;
+          data.push({ id: doc.id, ...docData } as TimeEntry);
+        } catch (e) {
+          console.error("Error mapping entry:", e);
+        }
+      }
       setAllEntries(data);
       
       // Filter by selected month/year
@@ -89,14 +117,37 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
     });
 
     let unsubscribeClock: () => void = () => {};
-    if (isMaurizio) {
-      const qClock = query(
-        collection(db, 'clockEvents'),
-        where('workerId', '==', worker.id),
-        where('azienda_id', '==', worker.azienda_id)
-      );
-      unsubscribeClock = onSnapshot(qClock, (snapshot) => {
-        const events = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ClockEvent));
+    if (isClockingWorker) {
+      const qClock = (IS_LG_ENV && !IS_TEST_PROJECT)
+        ? query(
+            collection(db, 'clockEvents'),
+            where('workerId', '==', worker.id),
+            where('azienda_id', '==', worker.azienda_id)
+          )
+        : query(
+            collection(db, 'clockEvents'),
+            where('workerId', '==', worker.id)
+          );
+
+      unsubscribeClock = onSnapshot(qClock, (querySnapshot) => {
+        console.log('Dati estratti per PDF:', querySnapshot?.docs);
+        if (!querySnapshot || !querySnapshot.docs) return;
+        if (querySnapshot.empty) {
+          setClockEvents([]);
+          return;
+        }
+
+        const events: ClockEvent[] = [];
+        for (const doc of querySnapshot.docs) {
+          try {
+            if (!doc || !doc.data || typeof doc.data !== 'function') continue;
+            const docData = doc.data();
+            if (!docData) continue;
+            events.push({ id: doc.id, ...docData } as ClockEvent);
+          } catch (e) {
+            console.error("Error mapping clock event:", e);
+          }
+        }
         const startDateStr = format(start, 'yyyy-MM-dd');
         const endDateStr = format(end, 'yyyy-MM-dd');
         
@@ -140,14 +191,63 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
   };
 
   const generatePDF = async (mode: 'month' | 'year') => {
-    const doc = new jsPDF();
-    const creationDate = format(new Date(), 'dd/MM/yyyy HH:mm', { locale: it });
+    const q = (IS_LG_ENV && !IS_TEST_PROJECT) 
+      ? query(
+          collection(db, 'timeEntries'),
+          where('workerCode', '==', worker.id),
+          where('azienda_id', '==', worker.azienda_id)
+        )
+      : query(
+          collection(db, 'timeEntries'),
+          where('workerCode', '==', worker.id)
+        );
+
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (e) {
+      console.error("Error querying entries for PDF:", e);
+    }
+
+    if (!querySnapshot || querySnapshot.empty) {
+        alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
+        return;
+    }
+
+    const fetchedEntries: TimeEntry[] = [];
+    for (const doc of querySnapshot.docs) {
+      if (doc && doc.exists()) {
+        try {
+          const docData = doc.data();
+          if (docData) {
+            fetchedEntries.push({ id: doc.id, ...docData } as TimeEntry);
+          }
+        } catch (e) {
+          console.error("Error mapping entry doc:", e);
+        }
+      }
+    }
+
+    const start = startOfMonth(new Date(parseInt(selectedYear), parseInt(selectedMonth)));
+    const end = endOfMonth(new Date(parseInt(selectedYear), parseInt(selectedMonth)));
 
     const targetEntries = mode === 'month' 
-      ? entries 
-      : allEntries
+      ? fetchedEntries.filter(e => e.date >= format(start, 'yyyy-MM-dd') && e.date <= format(end, 'yyyy-MM-dd')) 
+      : fetchedEntries
           .filter(e => e.date.startsWith(selectedYear))
           .sort((a, b) => a.date.localeCompare(b.date));
+
+    // Sort entries to make sure they are ordered chronologically
+    const sortedEntries = targetEntries.sort((a, b) => a.date.localeCompare(b.date));
+
+    if (!sortedEntries || sortedEntries.length === 0) {
+      alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
+      setShowPdfOptions(false);
+      return;
+    }
+
+    const doc = new jsPDF();
+    const creationDate = format(new Date(), 'dd/MM/yyyy HH:mm', { locale: it });
 
     // Logo handling with aspect ratio preservation
     try {
@@ -203,48 +303,57 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
     doc.setTextColor(71, 85, 105);
     doc.text(`Data Creazione: ${creationDate}`, 196, 65, { align: 'right' });
 
+    console.log('Dati estratti per PDF (Worker Personal):', targetEntries);
+    console.log('Dati estratti per PDF:', targetEntries);
+
     const totalOrd = targetEntries.reduce((acc, curr) => acc + (curr.ordinaria || 0), 0);
     const totalStr = targetEntries.reduce((acc, curr) => acc + (curr.straordinaria || 0), 0);
     const totalVia = targetEntries.reduce((acc, curr) => acc + (curr.viaggio || 0), 0);
     const totalFer = targetEntries.reduce((acc, curr) => acc + (curr.ferie || 0), 0);
 
-    const tableData = isMaurizio 
-      ? targetEntries.map(e => [
-          format(new Date(e.date), 'dd/MM/yyyy'),
-          clockEvents
-            .filter(ce => ce.date === e.date)
-            .sort((a, b) => {
-              const timeA = a.timestamp?.toDate?.()?.getTime() || 0;
-              const timeB = b.timestamp?.toDate?.()?.getTime() || 0;
-              return timeA - timeB;
-            })
-            .map(ev => {
-              const date = ev.timestamp?.toDate?.() || new Date();
-              return `${ev.type}: ${format(date, 'HH:mm')}`;
-            })
-            .join('\n'),
-          formatNumber(e.ordinaria || 0)
-        ])
-      : targetEntries.map(e => [
-          format(new Date(e.date), 'dd/MM/yyyy'),
-          e.cantiere,
-          e.intervento,
-          e.ordinaria ? formatNumber(e.ordinaria) : '-',
-          e.straordinaria ? formatNumber(e.straordinaria) : '-',
-          e.viaggio ? formatNumber(e.viaggio) : '-',
-          e.ferie ? formatNumber(e.ferie) : '-'
-        ]);
+    const tableData = isClockingWorker 
+      ? targetEntries.map(e => {
+          if (!e || !e.date) return ['-', '-', '-'];
+          return [
+            format(new Date(e.date), 'dd/MM/yyyy'),
+            clockEvents
+              .filter(ce => ce && ce.date === e.date)
+              .sort((a, b) => {
+                const timeA = a.timestamp?.toDate?.()?.getTime() || a.timestamp?.seconds || 0;
+                const timeB = b.timestamp?.toDate?.()?.getTime() || b.timestamp?.seconds || 0;
+                return timeA - timeB;
+              })
+              .map(ev => {
+                const date = ev.timestamp?.toDate?.() || (ev.timestamp?.seconds ? new Date(ev.timestamp.seconds * 1000) : new Date());
+                return `${ev.type || 'TIMBRATA'}: ${format(date, 'HH:mm')}`;
+              })
+              .join('\n'),
+            formatNumber(e.ordinaria || 0)
+          ];
+        })
+      : targetEntries.map(e => {
+          if (!e || !e.date) return ['-', '-', '-', '-', '-', '-', '-'];
+          return [
+            format(new Date(e.date), 'dd/MM/yyyy'),
+            e.cantiere || '-',
+            e.intervento || '-',
+            e.ordinaria ? formatNumber(e.ordinaria) : '-',
+            e.straordinaria ? formatNumber(e.straordinaria) : '-',
+            e.viaggio ? formatNumber(e.viaggio) : '-',
+            e.ferie ? formatNumber(e.ferie) : '-'
+          ];
+        });
 
     autoTable(doc, {
       startY: 72,
-      head: isMaurizio 
+      head: isClockingWorker 
         ? [['Data', 'Dettaglio Timbrature', 'Totale Ore']]
         : [['Data', 'Cantiere', 'Intervento', 'ORD', 'STR', 'VIA', 'FER']],
       body: tableData,
       theme: 'striped',
       headStyles: { fillColor: [15, 23, 42], fontStyle: 'bold' },
       styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak' },
-      columnStyles: isMaurizio ? {
+      columnStyles: isClockingWorker ? {
         0: { cellWidth: 30 },
         1: { cellWidth: 100 },
         2: { cellWidth: 30, halign: 'center' }
@@ -265,7 +374,7 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
     
     doc.setFontSize(11);
     doc.setFont('helvetica', 'normal');
-    if (isMaurizio) {
+    if (isClockingWorker) {
       doc.text(`Totale Ore Lavorate: ${formatNumber(totalOrd)}`, 14, finalY + 10);
     } else {
       doc.text(`Ore Ordinarie: ${formatNumber(totalOrd)}`, 14, finalY + 10);
@@ -276,7 +385,7 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
     
     doc.setFontSize(12);
     doc.setFont('helvetica', 'bold');
-    if (isMaurizio) {
+    if (isClockingWorker) {
       doc.text(`TOTALE GENERALE: ${formatNumber(totalOrd)}`, 14, finalY + 22);
     } else {
       doc.text(`TOTALE ORE LAVORATE (Excl. Ferie): ${formatNumber(totalOrd + totalStr + totalVia)}`, 14, finalY + 46);
@@ -416,7 +525,7 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
             <p className="text-slate-400 font-medium text-lg">Nessun dato registrato questo mese.</p>
             <Link to="/worker/add" className="text-dark-blue font-bold mt-4 inline-block hover:underline">Inizia a registrare ora &rarr;</Link>
           </div>
-        ) : isMaurizio ? (
+        ) : isClockingWorker ? (
           <div className="space-y-8">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">

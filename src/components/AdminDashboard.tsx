@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { db, handleFirestoreError, OperationType, IS_LG_ENV, DEFAULT_AZIENDA_ID } from '../lib/firebase';
-import { collection, query, onSnapshot, doc, setDoc, deleteDoc, orderBy, serverTimestamp, where } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType, IS_LG_ENV, DEFAULT_AZIENDA_ID, IS_TEST_PROJECT } from '../lib/firebase';
+import { collection, query, onSnapshot, doc, setDoc, deleteDoc, orderBy, serverTimestamp, where, getDocs } from 'firebase/firestore';
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, getDaysInMonth } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
@@ -9,14 +9,34 @@ import {
   FileBox, Download, LogOut, ChevronRight, X, Clock,
   CheckCircle2, AlertCircle, LayoutGrid, Edit2, Smartphone,
   ShoppingCart, Truck, Check, Cylinder, ArrowLeft, Save, Lock, UserPlus, Loader2,
-  Eye, EyeOff, Headset
+  Eye, EyeOff, Headset, Shirt, ShieldCheck, Stethoscope, BadgeCheck
 } from 'lucide-react';
 import { Worker, TimeEntry, MaterialRequest, ClockEvent } from '../types';
-import jsPDF from 'jspdf';
+import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { formatNumber } from '../lib/format';
-import { FeedbackModal } from './FeedbackModal';
+import { FeedbackModule } from './FeedbackModule';
 import { auth } from '../lib/firebase';
+
+const QUALIFICHE_LIST = [
+  'Patentino muletto',
+  'PLE',
+  'Lavoro in quota',
+  'Addetto primo soccorso',
+  'Preposto',
+  'Addetto antincendio',
+  'Luoghi confinati'
+];
+
+const VESTIARIO_CONFIG = {
+  scarpe: Array.from({ length: 15 }, (_, i) => (i + 36).toString()),
+  pantaloni: ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'],
+  giacca: ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'],
+  maglia: ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'],
+  guanti: Array.from({ length: 7 }, (_, i) => (i + 6).toString()),
+};
+
+const PATEN_INIZIALI = ['A', 'B', 'C', 'D', 'E', 'CQC'];
 
 interface AdminDashboardProps {
   onLogout: () => void;
@@ -24,7 +44,7 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminAziendaId }) => {
-  const [activeTab, setActiveTab] = useState<'entries' | 'workers' | 'material'>('entries');
+  const [activeTab, setActiveTab] = useState<'entries' | 'workers' | 'material' | 'feedback'>('entries');
   const [filterMode, setFilterMode] = useState<'dipendente' | 'mese' | 'settimana' | 'giorno'>('dipendente');
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -59,6 +79,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
   const [showWorkerFormCode, setShowWorkerFormCode] = useState(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
 
+  // New Profile Modals
+  const [showVestiarioModal, setShowVestiarioModal] = useState(false);
+  const [showQualificheModal, setShowQualificheModal] = useState(false);
+  const [showSicurezzaModal, setShowSicurezzaModal] = useState(false);
+
   // Month select options
   const monthOptions = Array.from({ length: 12 }, (_, i) => {
     const d = new Date(2026, i, 1);
@@ -77,27 +102,62 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     }, 8000);
     
     // Real-time workers
-    const workersQuery = adminAziendaId === 'SUPERADMIN' 
+    const workersQuery = (adminAziendaId === 'SUPERADMIN' || IS_TEST_PROJECT)
       ? collection(db, 'workers')
       : query(collection(db, 'workers'), where('azienda_id', '==', adminAziendaId));
 
-    const unsubWorkers = onSnapshot(workersQuery, (snapshot) => {
-      console.log('Admin Workers Snapshot size:', snapshot.size);
-      setWorkers(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Worker)));
+    const unsubWorkers = onSnapshot(workersQuery, (querySnapshot) => {
       setLoading(false);
+      console.log('Dati estratti per PDF:', querySnapshot?.docs);
+      if (!querySnapshot || !querySnapshot.docs) return;
+      if (querySnapshot.empty) {
+        setWorkers([]);
+        return;
+      }
+      const data: Worker[] = [];
+      for (const d of querySnapshot.docs) {
+        try {
+          if (!d || !d.data || typeof d.data !== 'function') continue;
+          const docData = d.data();
+          if (!docData) continue;
+          data.push({ id: d.id, ...docData } as Worker);
+        } catch (e) {
+          console.error("Error mapping worker doc:", e);
+        }
+      }
+      setWorkers(data);
     }, (err) => {
       setLoading(false);
       handleFirestoreError(err, OperationType.GET, 'workers');
     });
 
     // Real-time entries
-    const entriesQuery = adminAziendaId === 'SUPERADMIN'
+    const entriesQuery = (adminAziendaId === 'SUPERADMIN' || IS_TEST_PROJECT)
       ? query(collection(db, 'timeEntries'))
       : query(collection(db, 'timeEntries'), where('azienda_id', '==', adminAziendaId));
 
-    const unsubEntries = onSnapshot(entriesQuery, (snapshot) => {
-      console.log('Admin Entries Snapshot size:', snapshot.size);
-      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TimeEntry));
+    const unsubEntries = onSnapshot(entriesQuery, (querySnapshot) => {
+      console.log('Dati estratti per PDF:', querySnapshot?.docs);
+      if (!querySnapshot || !querySnapshot.docs) {
+        setLoading(false);
+        return;
+      }
+      if (querySnapshot.empty) {
+        setEntries([]);
+        setLoading(false);
+        return;
+      }
+      const data: TimeEntry[] = [];
+      for (const d of querySnapshot.docs) {
+        try {
+          if (!d || !d.data || typeof d.data !== 'function') continue;
+          const docData = d.data();
+          if (!docData) continue;
+          data.push({ id: d.id, ...docData } as TimeEntry);
+        } catch (e) {
+          console.error("Error mapping entry doc:", e);
+        }
+      }
       const sortedData = data.sort((a, b) => a.date.localeCompare(b.date));
       setEntries(sortedData);
       setLoading(false);
@@ -107,12 +167,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     });
 
     // Real-time material requests
-    const materialQuery = adminAziendaId === 'SUPERADMIN'
+    const materialQuery = (adminAziendaId === 'SUPERADMIN' || IS_TEST_PROJECT)
       ? collection(db, 'materialRequests')
       : query(collection(db, 'materialRequests'), where('azienda_id', '==', adminAziendaId));
 
-    const unsubMaterial = onSnapshot(materialQuery, (snapshot) => {
-      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as MaterialRequest));
+    const unsubMaterial = onSnapshot(materialQuery, (querySnapshot) => {
+      console.log('Dati estratti per PDF:', querySnapshot?.docs);
+      if (!querySnapshot || !querySnapshot.docs) return;
+      if (querySnapshot.empty) {
+        setMaterialRequests([]);
+        return;
+      }
+      const data: MaterialRequest[] = [];
+      for (const d of querySnapshot.docs) {
+        try {
+          if (!d || !d.data || typeof d.data !== 'function') continue;
+          const docData = d.data();
+          if (!docData) continue;
+          data.push({ id: d.id, ...docData } as MaterialRequest);
+        } catch (e) {
+          console.error("Error mapping material doc:", e);
+        }
+      }
       // Sort in-memory to avoid requiring a composite index
       const sortedData = data.sort((a, b) => {
         const timeA = a.createdAt?.seconds || 0;
@@ -124,23 +200,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
       handleFirestoreError(err, OperationType.GET, 'materialRequests');
     });
 
-    const clockQuery = adminAziendaId === 'SUPERADMIN'
+    const clockQuery = (adminAziendaId === 'SUPERADMIN' || IS_TEST_PROJECT)
       ? collection(db, 'clockEvents')
       : query(collection(db, 'clockEvents'), where('azienda_id', '==', adminAziendaId));
 
-    const unsubClock = onSnapshot(clockQuery, (snapshot) => {
-      setClockEvents(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ClockEvent)));
+    const unsubClock = onSnapshot(clockQuery, (querySnapshot) => {
+      console.log('Dati estratti per PDF:', querySnapshot?.docs);
+      if (!querySnapshot || !querySnapshot.docs) return;
+      if (querySnapshot.empty) {
+        setClockEvents([]);
+        return;
+      }
+      const data: ClockEvent[] = [];
+      for (const d of querySnapshot.docs) {
+        try {
+          if (!d || !d.data || typeof d.data !== 'function') continue;
+          const docData = d.data();
+          if (!docData) continue;
+          data.push({ id: d.id, ...docData } as ClockEvent);
+        } catch (e) {
+          console.error("Error mapping clock doc:", e);
+        }
+      }
+      setClockEvents(data);
     }, (err) => {
       handleFirestoreError(err, OperationType.GET, 'clockEvents');
     });
 
-    // Real-time company name
     let unsubCompany = () => {};
-    if (adminAziendaId !== 'SUPERADMIN') {
+    if (adminAziendaId && adminAziendaId !== 'SUPERADMIN') {
       unsubCompany = onSnapshot(doc(db, 'companies', adminAziendaId), (snapshot) => {
-        if (snapshot.exists()) {
-          setCompanyName(snapshot.data().name);
+        if (snapshot && typeof snapshot.exists === 'function' && snapshot.exists() && typeof snapshot.data === 'function') {
+          const data = snapshot.data();
+          if (data) {
+            setCompanyName(data.name || 'LG INOX');
+          }
         }
+      }, (err) => {
+        console.error("Error fetching company name:", err);
       });
     } else {
       setCompanyName('PANNELLO SUPERADMIN');
@@ -275,6 +372,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
   };
 
   const generateReportPDF = async () => {
+    const q = (adminAziendaId === 'SUPERADMIN' || IS_TEST_PROJECT)
+      ? query(collection(db, 'timeEntries'))
+      : query(collection(db, 'timeEntries'), where('azienda_id', '==', adminAziendaId));
+
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (e) {
+      console.error("Error fetching report data:", e);
+    }
+
+    if (!querySnapshot || querySnapshot.empty) {
+        alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
+        return;
+    }
+
+    const fetchedEntries: TimeEntry[] = [];
+    for (const doc of querySnapshot.docs) {
+      if (doc && doc.exists()) {
+        try {
+          const docData = doc.data();
+          if (docData) {
+            fetchedEntries.push({ id: doc.id, ...docData } as TimeEntry);
+          }
+        } catch (e) {
+          console.error("Error mapping entry:", e);
+        }
+      }
+    }
+
+    const reportEntries = fetchedEntries
+      .filter(e => {
+        const isDateMatch = e.date >= dateFrom && e.date <= dateTo;
+        const isSiteMatch = siteFilter ? e.cantiere.toLowerCase().includes(siteFilter.toLowerCase()) : true;
+        const isWorkerMatch = workerFilter ? e.workerName.toLowerCase().includes(workerFilter.toLowerCase()) || e.workerCode === workerFilter : true;
+        return isDateMatch && isSiteMatch && isWorkerMatch;
+      })
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    if (reportEntries.length === 0) {
+      alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
+      return;
+    }
+
     const doc = new jsPDF('l', 'mm', 'a4');
     const creationDate = format(new Date(), 'dd/MM/yyyy HH:mm', { locale: it });
 
@@ -321,23 +462,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     doc.setFontSize(12);
     doc.setTextColor(15, 23, 42);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Periodo: ${format(new Date(dateFrom), 'dd/MM/yy')} - ${format(new Date(dateTo), 'dd/MM/yy')}`, 14, 65);
+    const dateFromStr = dateFrom ? format(new Date(dateFrom), 'dd/MM/yy') : '...';
+    const dateToStr = dateTo ? format(new Date(dateTo), 'dd/MM/yy') : '...';
+    doc.text(`Periodo: ${dateFromStr} - ${dateToStr}`, 14, 65);
     
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(71, 85, 105);
     doc.text(`Data Creazione: ${creationDate}`, 283, 65, { align: 'right' });
 
-    const totalOrd = filteredEntries.reduce((acc, curr) => acc + (curr.ordinaria || 0), 0);
-    const totalStr = filteredEntries.reduce((acc, curr) => acc + (curr.straordinaria || 0), 0);
-    const totalVia = filteredEntries.reduce((acc, curr) => acc + (curr.viaggio || 0), 0);
-    const totalFer = filteredEntries.reduce((acc, curr) => acc + (curr.ferie || 0), 0);
+    console.log('Dati estratti per PDF (Report):', reportEntries);
+    console.log('Dati estratti per PDF:', reportEntries);
+
+    const totalOrd = reportEntries.reduce((acc, curr) => acc + (curr.ordinaria || 0), 0);
+    const totalStr = reportEntries.reduce((acc, curr) => acc + (curr.straordinaria || 0), 0);
+    const totalVia = reportEntries.reduce((acc, curr) => acc + (curr.viaggio || 0), 0);
+    const totalFer = reportEntries.reduce((acc, curr) => acc + (curr.ferie || 0), 0);
     
-    const tableData = filteredEntries.map(e => [
-      e.workerName,
-      format(new Date(e.date), 'dd/MM/yy'),
-      e.cantiere,
-      e.intervento,
+    const tableData = reportEntries.map(e => [
+      e.workerName || 'Dipendente',
+      e.date ? format(new Date(e.date), 'dd/MM/yy') : '-',
+      e.cantiere || '-',
+      e.intervento || '-',
       e.ordinaria ? formatNumber(e.ordinaria) : '-',
       e.straordinaria ? formatNumber(e.straordinaria) : '-',
       e.viaggio ? formatNumber(e.viaggio) : '-',
@@ -374,6 +520,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
   };
 
   const generateWorkerPDF = async (worker: Worker, targetEntries: TimeEntry[]) => {
+    const q = (adminAziendaId === 'SUPERADMIN' || IS_TEST_PROJECT)
+      ? query(collection(db, 'timeEntries'), where('workerCode', '==', worker.id))
+      : query(collection(db, 'timeEntries'), where('workerCode', '==', worker.id), where('azienda_id', '==', adminAziendaId));
+
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (e) {
+      console.error("Error fetching worker entries for PDF:", e);
+    }
+
+    if (!querySnapshot || querySnapshot.empty) {
+        alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
+        return;
+    }
+
+    const fetchedEntries: TimeEntry[] = [];
+    for (const d of querySnapshot.docs) {
+      if (d && d.exists()) {
+        try {
+          const docData = d.data();
+          if (docData) {
+            fetchedEntries.push({ id: d.id, ...docData } as TimeEntry);
+          }
+        } catch (e) {
+          console.error("Error mapping entry doc:", e);
+        }
+      }
+    }
+
+    const finalEntries = fetchedEntries
+      .filter(e => e.date >= dateFrom && e.date <= dateTo)
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    if (finalEntries.length === 0) {
+      alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
+      return;
+    }
+
     const doc = new jsPDF();
     const creationDate = format(new Date(), 'dd/MM/yyyy HH:mm', { locale: it });
 
@@ -412,7 +597,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     doc.setDrawColor(226, 232, 240); // slate-200
     doc.line(14, 40, 196, 40);
 
-    const title = `Riepilogo Ore ${format(new Date(dateFrom), 'dd/MM/yy')} - ${format(new Date(dateTo), 'dd/MM/yy')}`;
+    const dateFromWorker = dateFrom ? format(new Date(dateFrom), 'dd/MM/yy') : '...';
+    const dateToWorker = dateTo ? format(new Date(dateTo), 'dd/MM/yy') : '...';
+    const title = `Riepilogo Ore ${dateFromWorker} - ${dateToWorker}`;
     
     doc.setFontSize(18);
     doc.setFont('helvetica', 'bold');
@@ -429,48 +616,59 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     doc.setTextColor(71, 85, 105);
     doc.text(`Data Creazione: ${creationDate}`, 196, 65, { align: 'right' });
 
-    const totalOrd = targetEntries.reduce((acc, curr) => acc + (curr.ordinaria || 0), 0);
-    const totalStr = targetEntries.reduce((acc, curr) => acc + (curr.straordinaria || 0), 0);
-    const totalVia = targetEntries.reduce((acc, curr) => acc + (curr.viaggio || 0), 0);
-    const totalFer = targetEntries.reduce((acc, curr) => acc + (curr.ferie || 0), 0);
+    console.log('Dati estratti per PDF (Worker):', finalEntries);
+    console.log('Dati estratti per PDF:', finalEntries);
 
-    const tableData = worker.name === 'Maurizio Grollo'
-      ? targetEntries.map(e => [
-          format(new Date(e.date), 'dd/MM/yyyy'),
-          clockEvents
-            .filter(ce => ce.workerId === e.workerCode && ce.date === e.date)
-            .sort((a, b) => {
-              const timeA = a.timestamp?.toDate?.()?.getTime() || 0;
-              const timeB = b.timestamp?.toDate?.()?.getTime() || 0;
-              return timeA - timeB;
-            })
-            .map(ev => {
-              const date = ev.timestamp?.toDate?.() || new Date();
-              return `${ev.type}: ${format(date, 'HH:mm')}`;
-            })
-            .join('\n'),
-          formatNumber(e.ordinaria || 0)
-        ])
-      : targetEntries.map(e => [
-          format(new Date(e.date), 'dd/MM/yyyy'),
-          e.cantiere,
-          e.intervento,
-          e.ordinaria ? formatNumber(e.ordinaria) : '-',
-          e.straordinaria ? formatNumber(e.straordinaria) : '-',
-          e.viaggio ? formatNumber(e.viaggio) : '-',
-          e.ferie ? formatNumber(e.ferie) : '-'
-        ]);
+    const totalOrd = finalEntries.reduce((acc, curr) => acc + (curr.ordinaria || 0), 0);
+    const totalStr = finalEntries.reduce((acc, curr) => acc + (curr.straordinaria || 0), 0);
+    const totalVia = finalEntries.reduce((acc, curr) => acc + (curr.viaggio || 0), 0);
+    const totalFer = finalEntries.reduce((acc, curr) => acc + (curr.ferie || 0), 0);
+
+    const isClockingWorker = (name: string) => name === 'Maurizio Grollo' || name === 'Giulio Timbro';
+
+    const tableData = isClockingWorker(worker.name)
+      ? finalEntries.map(e => {
+          if (!e || !e.date) return ['-', '-', '-'];
+          return [
+            format(new Date(e.date), 'dd/MM/yyyy'),
+            clockEvents
+              .filter(ce => ce.workerId === e.workerCode && ce.date === e.date)
+              .sort((a, b) => {
+                const timeA = a.timestamp?.toDate?.()?.getTime() || a.timestamp?.seconds || 0;
+                const timeB = b.timestamp?.toDate?.()?.getTime() || b.timestamp?.seconds || 0;
+                return timeA - timeB;
+              })
+              .map(ev => {
+                const date = ev.timestamp?.toDate?.() || (ev.timestamp?.seconds ? new Date(ev.timestamp.seconds * 1000) : new Date());
+                return `${ev.type || 'EVENTO'}: ${format(date, 'HH:mm')}`;
+              })
+              .join('\n'),
+            formatNumber(e.ordinaria || 0)
+          ];
+        })
+      : finalEntries.map(e => {
+          if (!e || !e.date) return ['-', '-', '-', '-', '-', '-', '-'];
+          return [
+            format(new Date(e.date), 'dd/MM/yyyy'),
+            e.cantiere || '-',
+            e.intervento || '-',
+            e.ordinaria ? formatNumber(e.ordinaria) : '-',
+            e.straordinaria ? formatNumber(e.straordinaria) : '-',
+            e.viaggio ? formatNumber(e.viaggio) : '-',
+            e.ferie ? formatNumber(e.ferie) : '-'
+          ];
+        });
 
     autoTable(doc, {
       startY: 72,
-      head: worker.name === 'Maurizio Grollo'
+      head: isClockingWorker(worker.name)
         ? [['Data', 'Dettaglio Timbrature', 'Totale Ore']]
         : [['Data', 'Cantiere', 'Intervento', 'ORD', 'STR', 'VIA', 'FER']],
       body: tableData,
       theme: 'striped',
       headStyles: { fillColor: [15, 23, 42], fontStyle: 'bold' },
       styles: { fontSize: 8, cellPadding: 3, overflow: 'linebreak' },
-      columnStyles: worker.name === 'Maurizio Grollo' ? {
+      columnStyles: isClockingWorker(worker.name) ? {
         0: { cellWidth: 30 },
         1: { cellWidth: 100 },
         2: { cellWidth: 30, halign: 'center' }
@@ -491,7 +689,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     
     doc.setFontSize(11);
     doc.setFont('helvetica', 'normal');
-    if (worker.name === 'Maurizio Grollo') {
+    if (isClockingWorker(worker.name)) {
       doc.text(`Totale Ore Lavorate: ${formatNumber(totalOrd)}`, 14, finalY + 10);
     } else {
       doc.text(`Ore Ordinarie: ${formatNumber(totalOrd)}`, 14, finalY + 10);
@@ -502,7 +700,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     
     doc.setFontSize(12);
     doc.setFont('helvetica', 'bold');
-    if (worker.name === 'Maurizio Grollo') {
+    if (isClockingWorker(worker.name)) {
       doc.text(`TOTALE GENERALE: ${formatNumber(totalOrd)}`, 14, finalY + 22);
     } else {
       doc.text(`TOTALE ORE LAVORATE (Excl. Ferie): ${formatNumber(totalOrd + totalStr + totalVia)}`, 14, finalY + 46);
@@ -511,8 +709,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     doc.save(`ore_${worker.name}_report.pdf`);
   };
 
-  const generateWorkerProfilePDF = async (worker: Worker) => {
+  const generateWorkerProfilePDF = async (worker: any) => {
+    console.log('Dati estratti per PDF (Worker Profile):', worker);
+    
+    if (!worker) {
+      alert('Nessun dato trovato per i filtri selezionati');
+      return;
+    }
+
     const pdfDoc = new jsPDF();
+    
+    const safeFormatDate = (dateStr: string | undefined | null) => {
+      if (!dateStr) return '-';
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '-';
+        return format(d, 'dd/MM/yyyy');
+      } catch (e) {
+        return '-';
+      }
+    };
+
+    const workerName = worker?.name || 'Dipendente';
     
     // Logo
     try {
@@ -520,14 +738,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
       await new Promise((resolve) => {
         const img = new Image();
         img.crossOrigin = 'Anonymous';
+        const timeout = setTimeout(() => resolve(null), 2000); // Timeout logo load
         img.onload = () => {
+          clearTimeout(timeout);
           const maxWidth = 55;
           const ratio = img.width / img.height;
           const height = maxWidth / ratio;
           pdfDoc.addImage(img, 'PNG', 14, 10, maxWidth, height);
           resolve(null);
         };
-        img.onerror = () => resolve(null);
+        img.onerror = () => {
+          clearTimeout(timeout);
+          resolve(null);
+        };
         img.src = logoUrl;
       });
     } catch (e) {}
@@ -552,6 +775,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     let y = 65;
 
     const addSection = (title: string, data: { label: string, value: string }[]) => {
+      // Check if we need a new page
+      if (y > 250) {
+        pdfDoc.addPage();
+        y = 30;
+      }
+
       pdfDoc.setFontSize(10);
       pdfDoc.setFont('helvetica', 'bold');
       pdfDoc.setTextColor(30, 41, 59);
@@ -565,17 +794,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
         pdfDoc.setFont('helvetica', 'bold');
         pdfDoc.text(item.label + ':', x, y);
         pdfDoc.setFont('helvetica', 'normal');
-        pdfDoc.text(item.value || '-', x + 35, y);
+        pdfDoc.text(String(item.value || '-'), x + 35, y);
         if (i % 2 !== 0 || i === data.length - 1) y += 6;
       });
       y += 8;
     };
 
     addSection('Dati Personali', [
-      { label: 'NOME E COGNOME', value: worker.name },
-      { label: 'DATA DI NASCITA', value: worker.dataNascita ? format(new Date(worker.dataNascita), 'dd/MM/yyyy') : '-' },
+      { label: 'NOME E COGNOME', value: workerName },
+      { label: 'DATA DI NASCITA', value: safeFormatDate(worker.dataNascita) },
       { label: 'CODICE FISCALE', value: worker.codiceFiscale || '-' },
-      { label: 'LUOGO NASCITA', value: '-' } // Placeholder as not in Worker type yet but standard
+      { label: 'LUOGO NASCITA', value: '-' }
     ]);
 
     addSection('Inquadramento Aziendale', [
@@ -587,10 +816,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     ]);
 
     addSection('Date e Scadenze', [
-      { label: 'DATA ASSUNZIONE', value: worker.dataAssunzione ? format(new Date(worker.dataAssunzione), 'dd/MM/yyyy') : '-' },
-      { label: 'DATA CESSAZIONE', value: worker.dataCessazione ? format(new Date(worker.dataCessazione), 'dd/MM/yyyy') : '-' },
-      { label: 'FINE T. DET.', value: worker.dataFineTempoDeterminato ? format(new Date(worker.dataFineTempoDeterminato), 'dd/MM/yyyy') : '-' },
-      { label: 'PROSSIMO SCATTO', value: worker.dataProssimoScatto ? format(new Date(worker.dataProssimoScatto), 'dd/MM/yyyy') : '-' },
+      { label: 'DATA ASSUNZIONE', value: safeFormatDate(worker.dataAssunzione) },
+      { label: 'DATA CESSAZIONE', value: safeFormatDate(worker.dataCessazione) },
+      { label: 'FINE T. DET.', value: safeFormatDate(worker.dataFineTempoDeterminato) },
+      { label: 'PROSSIMO SCATTO', value: safeFormatDate(worker.dataProssimoScatto) },
       { label: 'N. SCATTI', value: String(worker.nScatti || '-') }
     ]);
 
@@ -599,25 +828,99 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
       { label: 'CELLULARE', value: worker.cellulare || '-' },
       { label: 'IBAN', value: worker.iban || '-' },
       { label: 'RESIDENZA', value: worker.residenza || '-' },
-      { label: 'CARTA IDENTITÀ', value: worker.numeroCartaIdentita || '-' },
-      { label: 'TAGLIA VESTIARIO', value: worker.tagliaVestiario || '-' }
+      { label: 'CARTA IDENTITÀ', value: worker.numeroCartaIdentita || '-' }
     ]);
 
-    addSection('Sicurezza e Formazione', [
-      { label: 'IDONEITÀ SANITARIA', value: worker.idoneitaSanitaria || '-' },
-      { label: 'FORMAZIONE SICUR.', value: worker.formazioneSicurezza || '-' },
-      { label: 'CONSEGNA DPI', value: worker.consegnaDpi || '-' },
-      { label: 'QUALIFICHE TEC.', value: worker.qualificheTecniche || '-' }
+    if (worker.vestiario) {
+      addSection('Dettaglio Vestiario', [
+        { label: 'SCARPE', value: worker.vestiario.scarpe || '-' },
+        { label: 'PANTALONI', value: worker.vestiario.pantaloni || '-' },
+        { label: 'GIACCA', value: worker.vestiario.giacca || '-' },
+        { label: 'MAGLIA', value: worker.vestiario.maglia || '-' },
+        { label: 'GUANTI', value: worker.vestiario.guanti || '-' },
+        { label: 'ALTRO', value: worker.vestiario.altro || '-' }
+      ]);
+    }
+
+    const sicurezzaData = [
+      { label: 'IDONEITÀ (VISITA)', value: safeFormatDate(worker.idoneitaSanitaria) },
+      { label: 'SICUREZZA GEN.', value: safeFormatDate(worker.sicurezzaNuova?.generale) },
+      { label: 'SICUREZZA SPEC.', value: safeFormatDate(worker.sicurezzaNuova?.specifica) },
+      { label: 'RISCHIO ATTESTATO', value: 'RISCHIO ALTO' }
+    ];
+    addSection('Sicurezza e Formazione', sicurezzaData);
+
+    const patentiStr = worker.patentiGuida?.join(', ') || '-';
+    addSection('Abilitazioni e Qualifiche', [
+      { label: 'PATENTI DI GUIDA', value: patentiStr }
     ]);
+
+    if (worker.qualificheNuove && worker.qualificheNuove.some(q => q.conseguita)) {
+      const qData = worker.qualificheNuove
+        .filter(q => q.conseguita)
+        .map(q => ({
+          label: q.nome,
+          value: `${q.dataConseguimento ? safeFormatDate(q.dataConseguimento) : ''} ${q.dataScadenza ? '(Scad: ' + safeFormatDate(q.dataScadenza) + ')' : ''} ${q.enteFormatore ? '[' + q.enteFormatore + ']' : ''}`.trim() || 'SI'
+        }));
+      addSection('Certificazioni Tecniche', qData);
+    }
 
     pdfDoc.setFontSize(7);
     pdfDoc.setTextColor(150);
     pdfDoc.text(`Documento generato il ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 14, 285);
 
-    pdfDoc.save(`Scheda_Dipendente_${worker.name.replace(/\s+/g, '_')}.pdf`);
+    pdfDoc.save(`Scheda_Dipendente_${workerName.replace(/\s+/g, '_')}.pdf`);
   };
 
+
   const generateMonthlyGroupedPDF = async () => {
+    if (!workers || workers.length === 0) {
+      alert('Nessun dipendente trovato per generare il PDF.');
+      return;
+    }
+
+    const q = (adminAziendaId === 'SUPERADMIN' || IS_TEST_PROJECT)
+      ? query(collection(db, 'timeEntries'))
+      : query(collection(db, 'timeEntries'), where('azienda_id', '==', adminAziendaId));
+
+    let querySnapshot;
+    try {
+      querySnapshot = await getDocs(q);
+    } catch (e) {
+      console.error("Error fetching grouped monthly data:", e);
+    }
+
+    if (!querySnapshot || querySnapshot.empty) {
+        alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
+        return;
+    }
+
+    const fetchedEntries: TimeEntry[] = [];
+    for (const doc of querySnapshot.docs) {
+      if (doc && doc.exists()) {
+        try {
+          const docData = doc.data();
+          if (docData) {
+            fetchedEntries.push({ id: doc.id, ...docData } as TimeEntry);
+          }
+        } catch (e) {
+          console.error("Error mapping entry:", e);
+        }
+      }
+    }
+
+    const mStart = startOfMonth(new Date(parseInt(selectedYear), parseInt(selectedMonth)));
+    const mEnd = endOfMonth(new Date(parseInt(selectedYear), parseInt(selectedMonth)));
+    const sStr = format(mStart, 'yyyy-MM-dd');
+    const eStr = format(mEnd, 'yyyy-MM-dd');
+
+    const monthlyEntriesAll = fetchedEntries.filter(e => e.date >= sStr && e.date <= eStr);
+
+    if (monthlyEntriesAll.length === 0) {
+      alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
+      return;
+    }
+
     const doc = new jsPDF('l', 'mm', 'a4');
     const creationDate = format(new Date(), 'dd/MM/yyyy HH:mm', { locale: it });
 
@@ -660,6 +963,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     doc.text('Riepilogo Mensile Ore Lavorate - Tutti i Dipendenti', 14, 55);
     
     const monthLabel = monthOptions.find(m => m.value === selectedMonth)?.label || '';
+    
     doc.setFontSize(12);
     doc.setTextColor(15, 23, 42);
     doc.setFont('helvetica', 'bold');
@@ -669,18 +973,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(71, 85, 105);
     doc.text(`Data Creazione: ${creationDate}`, 283, 65, { align: 'right' });
-
-    const mStart = startOfMonth(new Date(parseInt(selectedYear), parseInt(selectedMonth)));
-    const mEnd = endOfMonth(new Date(parseInt(selectedYear), parseInt(selectedMonth)));
-    const sStr = format(mStart, 'yyyy-MM-dd');
-    const eStr = format(mEnd, 'yyyy-MM-dd');
-
-    const monthlyEntriesAll = entries.filter(e => e.date >= sStr && e.date <= eStr);
-
-    if (monthlyEntriesAll.length === 0) {
-      alert('Nessun dato trovato per il periodo selezionato.');
-      return;
-    }
 
     const groupedData = workers.map(w => {
       const wEntries = monthlyEntriesAll.filter(e => e.workerCode === w.id);
@@ -712,10 +1004,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
         currentY = 25;
       }
 
+      const worker = group.worker;
+      if (!worker || !worker.name) {
+        console.warn('Skipping worker without data in grouped PDF');
+        return;
+      }
+
       doc.setFontSize(14);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(30, 41, 59);
-      doc.text(group.worker.name.toUpperCase(), 14, currentY);
+      doc.text(worker.name.toUpperCase(), 14, currentY);
       currentY += 8;
 
       // Worker Details in PDF header (Request 5 & 6)
@@ -765,7 +1063,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
         F: Array(daysInMonth).fill(0)
       };
 
-      group.entries.forEach(e => {
+    group.entries.forEach(e => {
+      if (!e || !e.date) return;
+      try {
         const day = new Date(e.date).getDate();
         if (day >= 1 && day <= daysInMonth) {
           rows.O[day - 1] += (e.ordinaria || 0);
@@ -773,7 +1073,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
           rows.V[day - 1] += (e.viaggio || 0);
           rows.F[day - 1] += (e.ferie || 0);
         }
-      });
+      } catch (err) {
+        console.warn('Error processing entry for grouped PDF:', e, err);
+      }
+    });
 
       const totals = {
         O: rows.O.reduce((a, b) => a + b, 0),
@@ -979,6 +1282,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
   };
 
   const generateMaterialRequestPDF = async (req: MaterialRequest) => {
+    console.log('Dati estratti per PDF (Material Request):', req);
+    
+    if (!req) {
+      alert('Nessun dato trovato per i filtri selezionati');
+      return;
+    }
+
     const pdfDoc = new jsPDF();
     
     // Logo
@@ -1060,6 +1370,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
 
     pdfDoc.save(`Ordine_Materiale_${req.id?.slice(-4).toUpperCase()}.pdf`);
 
+    console.log('Generating Material Request PDF for Request ID:', req.id);
+
+    if (!req || !req.items || req.items.length === 0) {
+      alert('Impossibile generare il PDF: la richiesta è vuota o non valida.');
+      return;
+    }
+
     // Mark as PDF generated
     try {
       await setDoc(doc(db, 'materialRequests', req.id!), { 
@@ -1123,8 +1440,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
             <span>Ordini Materiale</span>
           </button>
           <button 
-            onClick={() => setIsFeedbackOpen(true)}
-            className="w-full flex items-center gap-4 px-5 py-4 text-slate-400 hover:text-dark-blue hover:bg-white/5 rounded-2xl transition-all duration-300 font-bold uppercase tracking-widest text-xs"
+            onClick={() => setActiveTab('feedback')}
+            className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all duration-300 font-bold uppercase tracking-widest text-xs ${activeTab === 'feedback' ? 'bg-dark-blue text-white shadow-xl shadow-dark-blue/20' : 'text-slate-400 hover:bg-white/5'}`}
           >
             <Headset className="w-5 h-5" />
             <span>Feedback</span>
@@ -1185,8 +1502,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
             <span className="text-[9px] font-black uppercase tracking-widest">Ordini</span>
           </button>
           <button 
-            onClick={() => setIsFeedbackOpen(true)}
-            className="flex flex-col items-center gap-1 p-3 rounded-xl text-slate-500 transition-all"
+            onClick={() => setActiveTab('feedback')}
+            className={`flex flex-col items-center gap-1 p-3 rounded-xl transition-all ${activeTab === 'feedback' ? 'text-dark-blue' : 'text-slate-500'}`}
           >
             <Headset className="w-6 h-6" />
             <span className="text-[9px] font-black uppercase tracking-widest">FB</span>
@@ -1202,7 +1519,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
 
         {/* Content Box */}
         <div className="flex-1 overflow-auto p-4 sm:p-10 pb-24 lg:pb-10 bg-slate-50/50">
-          {activeTab === 'entries' ? (
+          {activeTab === 'feedback' ? (
+            <FeedbackModule 
+              onBack={() => setActiveTab('entries')} 
+              userEmail={auth.currentUser?.email || 'admin'} 
+              aziendaId={adminAziendaId} 
+            />
+          ) : activeTab === 'entries' ? (
             <div className="space-y-8 max-w-7xl mx-auto">
               {/* Existing entries content... */}
               
@@ -1252,12 +1575,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
               {filterMode === 'dipendente' && !selectedWorkerId && (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                   {workers.map(w => (
-                    <motion.button
+                    <motion.div
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                       key={w.id}
                       onClick={() => handleSelectWorker(w)}
-                      className="bg-white p-6 rounded-[2rem] shadow-lg border border-slate-100 flex items-center gap-4 text-left hover:border-dark-blue/20 transition-all group"
+                      className="bg-white p-6 rounded-[2rem] shadow-lg border border-slate-100 flex items-center gap-4 text-left hover:border-dark-blue/20 transition-all group cursor-pointer focus-visible:ring-2 focus-visible:ring-dark-blue"
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          handleSelectWorker(w);
+                        }
+                      }}
                     >
                       <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center text-dark-blue overflow-hidden border border-slate-200 shrink-0">
                         {w.photoUrl ? (
@@ -1272,9 +1603,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
                             <span key={i}>{part}</span>
                           ))}
                         </div>
-                        <div className="text-[10px] font-mono text-dark-blue font-bold">#{w.id}</div>
+                        <div className="text-[10px] font-mono text-dark-blue font-bold flex items-center gap-1.5 mt-0.5">
+                          <span>{visibleCodes[w.id] ? `#${w.id}` : '******'}</span>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation(); // Avoid selecting the card when clicking the eye icon
+                              setVisibleCodes(prev => ({ ...prev, [w.id]: !prev[w.id] }));
+                            }}
+                            className="p-0.5 hover:bg-slate-100 rounded-md transition-all text-slate-400 hover:text-dark-blue"
+                            title={visibleCodes[w.id] ? 'Nascondi codice' : 'Mostra codice'}
+                          >
+                            {visibleCodes[w.id] ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          </button>
+                        </div>
                       </div>
-                    </motion.button>
+                    </motion.div>
                   ))}
                   {workers.length === 0 && !loading && (
                     <div className="col-span-full p-20 text-center bg-white rounded-[2rem] border border-dashed border-slate-200">
@@ -1512,7 +1855,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
                       </div>
                       <div className="text-right">
                         <div className="text-[10px] font-black text-slate-400 uppercase tracking-tight leading-none">DATA</div>
-                        <div className="text-xs font-extrabold text-slate-700">{format(new Date(req.date), 'dd/MM/yy')}</div>
+                        <div className="text-xs font-extrabold text-slate-700">
+                          {req.date ? format(new Date(req.date), 'dd/MM/yy') : '-'}
+                        </div>
                       </div>
                     </div>
                   </motion.div>
@@ -1766,7 +2111,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
                 )}
                 {editingWorkerId && (
                   <button 
-                    onClick={() => generateWorkerProfilePDF(workers.find(w => w.id === editingWorkerId)!)}
+                    onClick={() => {
+                      const currentWorker = workers.find(w => w.id === editingWorkerId)!;
+                      generateWorkerProfilePDF({
+                        ...currentWorker,
+                        ...workerFormData,
+                        name: newWorkerName,
+                        id: editingWorkerId!
+                      });
+                    }}
                     className="flex items-center gap-2 px-6 py-3 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-all font-bold tracking-widest text-xs uppercase"
                   >
                     <Download className="w-4 h-4" />
@@ -1907,11 +2260,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">DATA CESSAZIONE</label>
                         <input type="date" value={workerFormData.dataCessazione || ''} onChange={e => setWorkerFormData({...workerFormData, dataCessazione: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl" />
                       </div>
-
-                      <div className="space-y-1.5 md:col-span-2">
-                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">URL FOTO PROFILO</label>
-                        <input type="text" value={newWorkerPhoto} onChange={e => setNewWorkerPhoto(e.target.value)} placeholder="https://..." className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl" />
-                      </div>
                     </div>
                   </div>
 
@@ -1946,8 +2294,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
                       </div>
 
                       <div className="space-y-1.5">
-                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-red-600">TAGLIA VESTIARIO</label>
-                        <input type="text" value={workerFormData.tagliaVestiario || ''} onChange={e => setWorkerFormData({...workerFormData, tagliaVestiario: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-red-100 rounded-2xl" />
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-red-600">VESTIARIO</label>
+                        <button 
+                          type="button"
+                          onClick={() => setShowVestiarioModal(true)}
+                          className="w-full flex items-center justify-between px-5 py-4 bg-slate-50 border border-red-100 rounded-2xl hover:bg-red-50 transition-all font-bold group"
+                        >
+                          <span className="text-slate-700">GESTISCI TAGLIE</span>
+                          <Shirt className="w-5 h-5 text-red-400 group-hover:scale-110 transition-transform" />
+                        </button>
                       </div>
 
                       <div className="space-y-1.5">
@@ -1957,22 +2312,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
 
                       <div className="space-y-1.5 md:col-span-2">
                         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-red-600">QUALIFICHE TECNICHE / PATENTI</label>
-                        <textarea value={workerFormData.qualificheTecniche || ''} onChange={e => setWorkerFormData({...workerFormData, qualificheTecniche: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-red-100 rounded-2xl h-32" />
+                        <button 
+                          type="button"
+                          onClick={() => setShowQualificheModal(true)}
+                          className="w-full flex items-center justify-between px-5 py-4 bg-slate-50 border border-red-100 rounded-2xl hover:bg-red-50 transition-all font-bold group"
+                        >
+                          <span className="text-slate-700">GESTISCI QUALIFICHE E PATENTI</span>
+                          <BadgeCheck className="w-5 h-5 text-red-400 group-hover:scale-110 transition-transform" />
+                        </button>
                       </div>
 
                       <div className="space-y-1.5">
-                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-red-600">CONSEGNA DPI</label>
-                        <input type="text" value={workerFormData.consegnaDpi || ''} onChange={e => setWorkerFormData({...workerFormData, consegnaDpi: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-red-100 rounded-2xl" />
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-red-600">IDONEITÀ SANITARIA (ULTIMA VISITA)</label>
+                        <input type="date" value={workerFormData.idoneitaSanitaria || ''} onChange={e => setWorkerFormData({...workerFormData, idoneitaSanitaria: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-red-100 rounded-2xl" />
                       </div>
 
                       <div className="space-y-1.5">
-                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-red-600">IDONEITÀ SANITARIA</label>
-                        <input type="text" value={workerFormData.idoneitaSanitaria || ''} onChange={e => setWorkerFormData({...workerFormData, idoneitaSanitaria: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-red-100 rounded-2xl" />
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-red-600">FORMAZIONE SICUREZZA</label>
+                        <button 
+                          type="button"
+                          onClick={() => setShowSicurezzaModal(true)}
+                          className="w-full flex items-center justify-between px-5 py-4 bg-slate-50 border border-red-100 rounded-2xl hover:bg-red-50 transition-all font-bold group"
+                        >
+                          <span className="text-slate-700">GESTISCI FORMAZIONE</span>
+                          <ShieldCheck className="w-5 h-5 text-red-400 group-hover:scale-110 transition-transform" />
+                        </button>
                       </div>
 
                       <div className="space-y-1.5 md:col-span-2">
-                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-red-600">FORMAZIONE SICUREZZA</label>
-                        <input type="text" value={workerFormData.formazioneSicurezza || ''} onChange={e => setWorkerFormData({...workerFormData, formazioneSicurezza: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-red-100 rounded-2xl" />
+                        <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 text-red-600">URL FOTO PROFILO</label>
+                        <input type="text" value={newWorkerPhoto} onChange={e => setNewWorkerPhoto(e.target.value)} placeholder="https://..." className="w-full px-5 py-4 bg-slate-50 border border-red-100 rounded-2xl focus:ring-4 focus:ring-red-500/5 focus:border-red-500 outline-none transition-all" />
                       </div>
                     </div>
                   </div>
@@ -2211,7 +2580,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
                   </div>
                 </div>
 
-                {selectedEntryDetail.workerName === 'Maurizio Grollo' && (
+                {(selectedEntryDetail.workerName === 'Maurizio Grollo' || selectedEntryDetail.workerName === 'Giulio Timbro') && (
                   <div className="mt-8 space-y-4">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">TIMBRATURE EFFETTUATE</label>
                     <div className="flex flex-wrap gap-2">
@@ -2262,12 +2631,346 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
         )}
       </AnimatePresence>
 
-      <FeedbackModal 
-        isOpen={isFeedbackOpen} 
-        onClose={() => setIsFeedbackOpen(false)} 
-        userEmail={auth.currentUser?.email || 'admin'}
-        aziendaId={adminAziendaId} 
-      />
+      {/* Vestiario Modal */}
+      <AnimatePresence>
+        {showVestiarioModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 sm:p-12">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowVestiarioModal(false)}
+              className="absolute inset-0 bg-slate-900/80 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 30 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 30 }}
+              className="bg-white w-full max-w-lg p-10 rounded-[3.5rem] shadow-2xl relative z-10 border border-white/20"
+            >
+              <div className="flex items-center gap-4 mb-8 border-b border-slate-50 pb-6">
+                <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center text-red-600">
+                  <Shirt className="w-7 h-7" />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Vestiario</h3>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Taglie per ogni indumento</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-6 mb-10">
+                {['scarpe', 'pantaloni', 'giacca', 'maglia', 'guanti', 'altro'].map((item) => (
+                  <div key={item} className="space-y-1.5">
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">{item}</label>
+                    {item === 'altro' ? (
+                      <input 
+                        type="text" 
+                        value={workerFormData.vestiario?.[item as keyof typeof workerFormData.vestiario] || ''} 
+                        onChange={e => setWorkerFormData({
+                          ...workerFormData,
+                          vestiario: {
+                            ...(workerFormData.vestiario || {}),
+                            [item]: e.target.value
+                          }
+                        })}
+                        className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-red-500/5 focus:border-red-500 outline-none transition-all font-bold"
+                      />
+                    ) : (
+                      <select
+                        value={workerFormData.vestiario?.[item as keyof typeof VESTIARIO_CONFIG] || ''}
+                        onChange={e => setWorkerFormData({
+                          ...workerFormData,
+                          vestiario: {
+                            ...(workerFormData.vestiario || {}),
+                            [item]: e.target.value
+                          }
+                        })}
+                        className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-red-500/5 focus:border-red-500 outline-none transition-all font-bold appearance-none"
+                      >
+                        <option value="">SELEZIONA</option>
+                        {VESTIARIO_CONFIG[item as keyof typeof VESTIARIO_CONFIG].map(size => (
+                          <option key={size} value={size}>{size}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <button 
+                onClick={() => setShowVestiarioModal(false)}
+                className="w-full py-6 bg-dark-blue text-white font-black rounded-2xl tracking-widest uppercase text-sm hover:scale-[1.02] shadow-xl shadow-blue-200 transition-all active:scale-98"
+              >
+                CONFERMA E CHIUDI
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Qualifiche Modal */}
+      <AnimatePresence>
+        {showQualificheModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 sm:p-12">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowQualificheModal(false)}
+              className="absolute inset-0 bg-slate-900/80 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 30 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 30 }}
+              className="bg-white w-full max-w-5xl p-10 rounded-[3.5rem] shadow-2xl relative z-10 border border-white/20"
+            >
+              <div className="flex items-center gap-4 mb-8 border-b border-slate-50 pb-6">
+                <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center text-red-600">
+                  <BadgeCheck className="w-7 h-7" />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Qualifiche Tecniche / Patenti</h3>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Abilitazioni e scadenze</p>
+                </div>
+              </div>
+
+              <div className="max-h-[60vh] overflow-y-auto pr-4 mb-10 space-y-8 custom-scrollbar">
+                {/* PATENTI DI GUIDA SECTION */}
+                <div className="p-8 bg-red-50/30 rounded-[2.5rem] border border-red-100/50">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center text-red-600">
+                      <Smartphone className="w-5 h-5 rotate-90" />
+                    </div>
+                    <h4 className="text-sm font-black text-slate-800 uppercase tracking-widest">PATENTI DI GUIDA</h4>
+                  </div>
+                  <div className="flex flex-wrap gap-4">
+                    {PATEN_INIZIALI.map(lit => (
+                      <label key={lit} className="flex items-center gap-3 bg-white px-6 py-4 rounded-2xl border border-slate-200 cursor-pointer hover:bg-red-50 transition-all select-none">
+                        <input 
+                          type="checkbox"
+                          checked={workerFormData.patentiGuida?.includes(lit) || false}
+                          onChange={e => {
+                            const current = [...(workerFormData.patentiGuida || [])];
+                            if (e.target.checked) {
+                              if (!current.includes(lit)) current.push(lit);
+                            } else {
+                              const idx = current.indexOf(lit);
+                              if (idx >= 0) current.splice(idx, 1);
+                            }
+                            setWorkerFormData({ ...workerFormData, patentiGuida: current });
+                          }}
+                          className="w-6 h-6 appearance-none border-2 border-slate-300 rounded-lg checked:bg-red-600 checked:border-red-600 transition-all cursor-pointer"
+                        />
+                        <span className={`text-lg font-black ${workerFormData.patentiGuida?.includes(lit) ? 'text-red-600' : 'text-slate-400'}`}>{lit}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  {QUALIFICHE_LIST.map((qName) => {
+                    const q = workerFormData.qualificheNuove?.find(item => item.nome === qName) || { nome: qName, conseguita: false };
+                    return (
+                      <div key={qName} className="grid grid-cols-1 md:grid-cols-12 gap-6 items-end p-6 bg-slate-50 rounded-[2rem] border border-slate-200/50 hover:bg-slate-100/50 transition-all">
+                        <div className="md:col-span-3 border-r border-slate-200/50 pr-4">
+                          <label className="flex items-center gap-4 cursor-pointer group">
+                            <div className="relative">
+                              <input 
+                                type="checkbox" 
+                                checked={q.conseguita} 
+                                onChange={e => {
+                                  const current = [...(workerFormData.qualificheNuove || [])];
+                                  const idx = current.findIndex(item => item.nome === qName);
+                                  if (idx >= 0) {
+                                    current[idx] = { ...current[idx], conseguita: e.target.checked };
+                                  } else {
+                                    current.push({ nome: qName, conseguita: e.target.checked });
+                                  }
+                                  setWorkerFormData({ ...workerFormData, qualificheNuove: current });
+                                }}
+                                className="w-7 h-7 appearance-none border-2 border-slate-300 rounded-lg checked:bg-red-600 checked:border-red-600 transition-all cursor-pointer"
+                              />
+                              {q.conseguita && <Check className="w-4 h-4 text-white absolute top-1.5 left-1.5 pointer-events-none" />}
+                            </div>
+                            <span className={`text-xs font-black uppercase tracking-tight transition-all ${q.conseguita ? 'text-slate-900 scale-110' : 'text-slate-400'}`}>
+                              {qName}
+                            </span>
+                          </label>
+                        </div>
+                        
+                        <div className="md:col-span-3 space-y-1.5">
+                          <label className="block text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">DATA CONSEGUIMENTO</label>
+                          <input 
+                            type="date" 
+                            value={q.dataConseguimento || ''} 
+                            onChange={e => {
+                              const current = [...(workerFormData.qualificheNuove || [])];
+                              const idx = current.findIndex(item => item.nome === qName);
+                              if (idx >= 0) {
+                                current[idx] = { ...current[idx], dataConseguimento: e.target.value };
+                              } else {
+                                current.push({ nome: qName, conseguita: false, dataConseguimento: e.target.value });
+                              }
+                              setWorkerFormData({ ...workerFormData, qualificheNuove: current });
+                            }}
+                            className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-red-500/5 outline-none font-bold text-xs"
+                          />
+                        </div>
+
+                        <div className="md:col-span-3 space-y-1.5">
+                          <label className="block text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">DATA SCADENZA</label>
+                          <input 
+                            type="date" 
+                            value={q.dataScadenza || ''} 
+                            onChange={e => {
+                              const current = [...(workerFormData.qualificheNuove || [])];
+                              const idx = current.findIndex(item => item.nome === qName);
+                              if (idx >= 0) {
+                                current[idx] = { ...current[idx], dataScadenza: e.target.value };
+                              } else {
+                                current.push({ nome: qName, conseguita: false, dataScadenza: e.target.value });
+                              }
+                              setWorkerFormData({ ...workerFormData, qualificheNuove: current });
+                            }}
+                            className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-red-500/5 outline-none font-bold text-xs"
+                          />
+                        </div>
+
+                        <div className="md:col-span-3 space-y-1.5">
+                          <label className="block text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">ENTE FORMATORE</label>
+                          <input 
+                            type="text" 
+                            placeholder="..."
+                            value={q.enteFormatore || ''} 
+                            onChange={e => {
+                              const current = [...(workerFormData.qualificheNuove || [])];
+                              const idx = current.findIndex(item => item.nome === qName);
+                              if (idx >= 0) {
+                                current[idx] = { ...current[idx], enteFormatore: e.target.value };
+                              } else {
+                                current.push({ nome: qName, conseguita: false, enteFormatore: e.target.value });
+                              }
+                              setWorkerFormData({ ...workerFormData, qualificheNuove: current });
+                            }}
+                            className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-4 focus:ring-red-500/5 outline-none font-bold text-xs"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setShowQualificheModal(false)}
+                className="w-full py-6 bg-dark-blue text-white font-black rounded-2xl tracking-widest uppercase text-sm hover:scale-[1.02] shadow-xl shadow-blue-200 transition-all active:scale-98"
+              >
+                CONFERMA E CHIUDI
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Sicurezza Modal */}
+      <AnimatePresence>
+        {showSicurezzaModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 sm:p-12">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSicurezzaModal(false)}
+              className="absolute inset-0 bg-slate-900/80 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 30 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 30 }}
+              className="bg-white w-full max-w-lg p-10 rounded-[3.5rem] shadow-2xl relative z-10 border border-white/20"
+            >
+              <div className="flex items-center gap-4 mb-8 border-b border-slate-50 pb-6">
+                <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center text-red-600">
+                  <ShieldCheck className="w-7 h-7" />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Formazione Sicurezza</h3>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Corsi obbligatori</p>
+                </div>
+              </div>
+
+              <div className="space-y-8 mb-10">
+                <div className="mb-4">
+                  <h4 className="text-[10px] font-black text-red-600 uppercase tracking-widest mb-1 italic">CORSI OBBLIGATORI - RISCHIO ALTO</h4>
+                </div>
+
+                <div className="p-8 bg-slate-50 rounded-[2.5rem] border border-slate-200/50 space-y-6">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-black text-slate-800 uppercase tracking-tight italic">Parte Generale</span>
+                    <span className="text-[9px] bg-emerald-100 text-emerald-700 font-black px-3 py-1.5 rounded-lg uppercase tracking-widest">Senza Scadenza</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">DATA SVOLGIMENTO</label>
+                    <input 
+                      type="date" 
+                      value={workerFormData.sicurezzaNuova?.generale || ''} 
+                      onChange={e => setWorkerFormData({
+                        ...workerFormData,
+                        sicurezzaNuova: {
+                          ...(workerFormData.sicurezzaNuova || {}),
+                          generale: e.target.value
+                        }
+                      })}
+                      className="w-full px-5 py-4 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-red-500/5 outline-none font-bold"
+                    />
+                  </div>
+                </div>
+
+                <div className="p-8 bg-slate-50 rounded-[2.5rem] border border-slate-200/50 space-y-6">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-black text-slate-800 uppercase tracking-tight italic">Parte Specifica</span>
+                    <span className="text-[9px] bg-red-100 text-red-700 font-black px-3 py-1.5 rounded-lg uppercase tracking-widest text-center">Aggiornamento ogni 5 anni</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">DATA ULTIMO AGGIORNAMENTO</label>
+                    <input 
+                      type="date" 
+                      value={workerFormData.sicurezzaNuova?.specifica || ''} 
+                      onChange={e => setWorkerFormData({
+                        ...workerFormData,
+                        sicurezzaNuova: {
+                          ...(workerFormData.sicurezzaNuova || {}),
+                          specifica: e.target.value
+                        }
+                      })}
+                      className="w-full px-5 py-4 bg-white border border-slate-200 rounded-2xl focus:ring-4 focus:ring-red-500/5 outline-none font-bold"
+                    />
+                  </div>
+                  {workerFormData.sicurezzaNuova?.specifica && (
+                    <div className="flex items-center gap-3 p-4 bg-red-50 rounded-2xl border border-red-100 text-red-600 font-black uppercase text-[10px] tracking-tight">
+                      <Calendar className="w-5 h-5 shrink-0" />
+                      <div>
+                        PROSSIMO AGGIORNAMENTO ENTRO:
+                        <div className="text-sm font-black mt-0.5">
+                          {format(new Date(new Date(workerFormData.sicurezzaNuova.specifica).setFullYear(new Date(workerFormData.sicurezzaNuova.specifica).getFullYear() + 5)), 'dd/MM/yyyy')}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setShowSicurezzaModal(false)}
+                className="w-full py-6 bg-dark-blue text-white font-black rounded-2xl tracking-widest uppercase text-sm hover:scale-[1.02] shadow-xl shadow-blue-200 transition-all active:scale-98"
+              >
+                CONFERMA E CHIUDI
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

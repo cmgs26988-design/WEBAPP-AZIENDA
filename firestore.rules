@@ -7,36 +7,41 @@ service cloud.firestore {
       return request.auth != null;
     }
     
+    function getUserEmail() {
+      return request.auth != null && request.auth.token != null && 'email' in request.auth.token ? request.auth.token.email : null;
+    }
+    
     function isSuperAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == 'cmgs26988@gmail.com' ||
-        request.auth.token.email == 'admin@optime-rdm.com'
+      return isSignedIn() && getUserEmail() != null && (
+        getUserEmail() == 'cmgs26988@gmail.com' ||
+        getUserEmail() == 'admin@optime-rdm.com'
       );
     }
 
     function adminHasAzienda(aziendaId) {
-      return isSignedIn() && (
-        exists(/databases/$(database)/documents/utenti_autorizzati/$(request.auth.token.email)) &&
-        get(/databases/$(database)/documents/utenti_autorizzati/$(request.auth.token.email)).data.azienda_id == aziendaId
-      );
+      return isSignedIn() && 
+             getUserEmail() != null && 
+             exists(/databases/$(database)/documents/utenti_autorizzati/$(getUserEmail())) &&
+             get(/databases/$(database)/documents/utenti_autorizzati/$(getUserEmail())).data.azienda_id == aziendaId;
     }
 
-    // UTENTI AUTORIZZATI - Accessibile per il controllo admin
+    // WORKERS - Accessibile pubblicamente per login operaio
+    match /workers/{workerId} {
+      allow get, list: if true; 
+      allow update: if true; 
+      allow create: if isSuperAdmin() || (isSignedIn() && adminHasAzienda(request.resource.data.azienda_id));
+      allow delete: if isSuperAdmin();
+    }
+
+    // UTENTI AUTORIZZATI - Accessibile per il controllo admin (lettura pubblica per verifica iniziale)
     match /utenti_autorizzati/{docId} {
-      allow get: if true; 
-      allow list: if isSignedIn() && (resource == null || resource.data.email == request.auth.token.email);
+      allow get, list: if true; 
       allow write: if isSuperAdmin();
     }
-
-    // WORKERS - Permette il login tramite codice identificativo e gestione admin
-    match /workers/{workerId} {
-      allow get: if true; 
-      allow list: if isSignedIn() && (isSuperAdmin() || adminHasAzienda(resource.data.azienda_id));
-      allow create: if isSuperAdmin() || (isSignedIn() && adminHasAzienda(request.resource.data.azienda_id));
-      allow update: if isSuperAdmin() || 
-                    (isSignedIn() && adminHasAzienda(resource.data.azienda_id)) ||
-                    (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deviceId']) && (resource.data.deviceId == '' || resource.data.deviceId == null));
-      allow delete: if isSuperAdmin();
+    
+    // TEST - Per verifica connessione
+    match /test/{docId} {
+      allow read: if true;
     }
 
     // TIME ENTRIES - Registrazioni ore
@@ -63,8 +68,8 @@ service cloud.firestore {
 
     // FEEDBACK - Segnalazioni bug e migliorie
     match /feedback/{feedbackId} {
-      allow create: if true;
-      allow read, update, delete: if isSuperAdmin();
+      allow create, read: if true;
+      allow update, delete: if isSuperAdmin();
     }
 
     // COMPANIES - Gestione aziende

@@ -25,13 +25,33 @@ export interface Worker {
   email?: string;
   iban?: string;
   cellulare?: string;
-  tagliaVestiario?: string;
+  tagliaVestiario?: string; // Legacy field
+  vestiario?: {
+    scarpe?: string;
+    pantaloni?: string;
+    giacca?: string;
+    maglia?: string;
+    guanti?: string;
+    altro?: string;
+  };
   residenza?: string;
-  qualificheTecniche?: string;
+  qualificheTecniche?: string; // Legacy field
+  qualificheNuove?: Array<{
+    nome: string;
+    conseguita: boolean;
+    dataConseguimento?: string;
+    dataScadenza?: string;
+    enteFormatore?: string;
+  }>;
+  patentiGuida?: string[];
   numeroCartaIdentita?: string;
-  consegnaDpi?: string;
+  consegnaDpi?: string; // To be removed from UI but kept in type for safety
   idoneitaSanitaria?: string;
-  formazioneSicurezza?: string;
+  formazioneSicurezza?: string; // Legacy
+  sicurezzaNuova?: {
+    generale?: string;
+    specifica?: string;
+  };
 }
 
 export interface ClockEvent {

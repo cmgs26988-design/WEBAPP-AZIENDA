@@ -38,14 +38,22 @@ export const WorkerLogin: React.FC<WorkerLoginProps> = ({ onLogin, onAdminLogin 
     setLoading(true);
     setError('');
 
-    const upperCode = code.toUpperCase();
+    const upperCode = code.trim().toUpperCase();
     const currentDeviceId = getDeviceId();
     
     try {
-      const workerDoc = await fetchWithRetry(() => getDoc(doc(db, 'workers', upperCode)));
+      const docRef = doc(db, 'workers', upperCode);
+      const workerDoc = await fetchWithRetry(() => getDoc(docRef));
+      
+      if (!workerDoc) {
+        throw new Error("Impossibile connettersi al database.");
+      }
 
-      if (workerDoc.exists()) {
+      console.log('Worker document fetch result exists:', workerDoc && typeof workerDoc.exists === 'function' && workerDoc.exists());
+
+      if (workerDoc && typeof workerDoc.exists === 'function' && workerDoc.exists() && typeof workerDoc.data === 'function') {
         const data = workerDoc.data();
+        if (!data) throw new Error("Documento trovato ma senza dati.");
         
         if (upperCode !== 'TEST01') {
           if (data.deviceId && data.deviceId !== currentDeviceId) {
@@ -84,10 +92,10 @@ export const WorkerLogin: React.FC<WorkerLoginProps> = ({ onLogin, onAdminLogin 
       console.error('Login error detail:', err);
       let message = 'Si è verificato un errore durante l\'accesso.';
       
-      if (err?.message?.includes('offline') || err?.message?.includes('network-error')) {
+      if (err?.message?.includes('Missing or insufficient permissions') || err?.message?.includes('permission-denied')) {
+        message = 'Accesso negato: permessi insufficienti sul database.';
+      } else if (err?.message?.includes('offline') || err?.message?.includes('network-error')) {
         message = 'Errore di connessione: il database Firebase non è raggiungibile.';
-      } else if (err?.message?.includes('permission-denied')) {
-        message = 'Accesso negato: permessi insufficienti.';
       }
       
       setError(message);
@@ -105,19 +113,25 @@ export const WorkerLogin: React.FC<WorkerLoginProps> = ({ onLogin, onAdminLogin 
       const docRef = doc(db, 'utenti_autorizzati', email);
       const docSnap = await fetchWithRetry(() => getDoc(docRef));
       
-      if (docSnap.exists()) {
-        return docSnap.data().azienda_id;
+      if (docSnap && typeof docSnap.exists === 'function' && docSnap.exists() && typeof docSnap.data === 'function') {
+        const data = docSnap.data();
+        return data?.azienda_id;
       }
       
       // Fallback: query by email field
+      console.log('Checking authorization for email:', email);
       const q = query(
         collection(db, 'utenti_autorizzati'), 
         where('email', '==', email)
       );
       const querySnapshot = await fetchWithRetry(() => getDocs(q));
       
-      if (!querySnapshot.empty) {
-        return querySnapshot.docs[0].data().azienda_id;
+      if (querySnapshot && !querySnapshot.empty && querySnapshot.docs && querySnapshot.docs[0]) {
+        const firstDoc = querySnapshot.docs[0];
+        if (firstDoc && typeof firstDoc.exists === 'function' && firstDoc.exists() && typeof firstDoc.data === 'function') {
+          const data = firstDoc.data();
+          return data?.azienda_id;
+        }
       }
     } catch (err) {
       console.error("Authorization check error:", err);
@@ -286,6 +300,7 @@ export const WorkerLogin: React.FC<WorkerLoginProps> = ({ onLogin, onAdminLogin 
               >
                 Area Amministratore
               </button>
+
             </motion.form>
           ) : (
             <motion.div 

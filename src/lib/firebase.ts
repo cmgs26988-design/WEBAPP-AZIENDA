@@ -10,23 +10,31 @@ import firebaseConfigLG from '../../firebase-applet-config-lg.json';
 const getSelectedConfig = () => {
   try {
     // 1. Controllo URL (es. ?env=lg o ?env=test)
-    if (typeof window !== 'undefined' && window.location) {
+    if (typeof window !== 'undefined' && window.location && window.location.search) {
       const params = new URLSearchParams(window.location.search);
       const envParam = params.get('env');
       
-      if (envParam === 'lg') {
-        localStorage.setItem('optimerdm_env', 'lg');
-        return firebaseConfigLG;
-      }
-      if (envParam === 'test') {
-        localStorage.setItem('optimerdm_env', 'test');
-        return firebaseConfigTest;
+      if (envParam === 'lg' || envParam === 'test') {
+        try {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('optimerdm_env', envParam);
+          }
+        } catch (e) {
+          console.warn("localStorage not available for saving env", e);
+        }
+        return envParam === 'lg' ? firebaseConfigLG : firebaseConfigTest;
       }
     }
 
     // 2. Controllo localStorage per persistenza
-    const savedEnv = localStorage.getItem('optimerdm_env');
-    if (savedEnv === 'lg') return firebaseConfigLG;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const savedEnv = localStorage.getItem('optimerdm_env');
+        if (savedEnv === 'lg') return firebaseConfigLG;
+      }
+    } catch (e) {
+      console.warn("localStorage not accessible for reading env", e);
+    }
   } catch (e) {
     console.error("Error in environment detection:", e);
   }
@@ -36,11 +44,14 @@ const getSelectedConfig = () => {
 };
 
 const firebaseConfig = getSelectedConfig();
+
 let isLgEnv = false;
 try {
-  isLgEnv = localStorage.getItem('optimerdm_env') === 'lg';
+  if (typeof localStorage !== 'undefined') {
+    isLgEnv = localStorage.getItem('optimerdm_env') === 'lg';
+  }
 } catch (e) {
-  console.error("Error checking environment in localStorage:", e);
+  console.warn("Error checking environment in localStorage:", e);
 }
 export const IS_LG_ENV = isLgEnv;
 export const currentEnv = IS_LG_ENV ? 'LG INOX' : 'TEST (Sviluppo)';
@@ -48,6 +59,8 @@ export const DEFAULT_AZIENDA_ID = IS_LG_ENV ? 'lg_inox' : 'test_azienda';
 
 console.log(`[Firebase] Avvio app in ambiente: ${currentEnv}`);
 console.log(`[Firebase] Project ID: ${firebaseConfig.projectId}`);
+
+export const IS_TEST_PROJECT = firebaseConfig.projectId?.includes('test') || firebaseConfig.projectId?.includes('dev') || !firebaseConfig.projectId?.includes('lg-inox');
 
 // Initialize Firebase app
 const app = initializeApp(firebaseConfig);

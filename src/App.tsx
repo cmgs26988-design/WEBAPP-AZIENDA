@@ -7,7 +7,6 @@ import { WorkerDashboard } from './components/WorkerDashboard';
 import { AddEntry } from './components/AddEntry';
 import { MonthlyHours } from './components/MonthlyHours';
 import { AdminDashboard } from './components/AdminDashboard';
-import { DeveloperPanel } from './components/DeveloperPanel';
 import { motion, AnimatePresence } from 'motion/react';
 import { Worker } from './types';
 
@@ -64,16 +63,30 @@ export default function App() {
           
           let aziendaId = null;
           
-          if (docSnap.exists()) {
-            aziendaId = docSnap.data().azienda_id;
+          if (docSnap && typeof docSnap.exists === 'function' && docSnap.exists() && typeof docSnap.data === 'function') {
+            const docData = docSnap.data();
+            if (docData) {
+              aziendaId = docData.azienda_id;
+            }
           } else {
             // Fallback: check authorized users collection by email query
             const q = query(collection(db, 'utenti_autorizzati'), where('email', '==', user.email));
             const querySnapshot = await fetchWithRetry(() => getDocs(q));
             
-            if (!querySnapshot.empty) {
-              aziendaId = querySnapshot.docs[0].data().azienda_id;
+            if (querySnapshot && !querySnapshot.empty && querySnapshot.docs && querySnapshot.docs[0]) {
+              const firstDoc = querySnapshot.docs[0];
+              if (firstDoc && typeof firstDoc.exists === 'function' && firstDoc.exists() && typeof firstDoc.data === 'function') {
+                const firstDocData = firstDoc.data();
+                if (firstDocData) {
+                  aziendaId = firstDocData.azienda_id;
+                }
+              }
             }
+          }
+
+          // Fallback per i Super Admin hardcoded (es. cmgs26988@gmail.com)
+          if (!aziendaId && (user.email === 'cmgs26988@gmail.com' || user.email === 'admin@optime-rdm.com')) {
+            aziendaId = 'SUPERADMIN';
           }
 
           if (aziendaId) {
@@ -167,9 +180,6 @@ export default function App() {
 
             {/* Admin routes */}
             <Route path="/admin/*" element={isAdmin && adminAziendaId ? <AdminDashboard onLogout={handleLogout} adminAziendaId={adminAziendaId} /> : <Navigate to="/login" />} />
-
-            {/* Developer routes */}
-            <Route path="/dev" element={userEmail === 'cmgs26988@gmail.com' ? <DeveloperPanel onBack={() => window.history.back()} /> : <Navigate to="/" />} />
           </Routes>
         </AnimatePresence>
       </div>

@@ -18,7 +18,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const editingEntry = location.state?.entry as TimeEntry | undefined;
-  const isMaurizio = worker.name === 'Maurizio Grollo';
+  const isClockingWorker = worker.name === 'Maurizio Grollo' || worker.name === 'Giulio Timbro';
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -42,7 +42,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
   });
 
   useEffect(() => {
-    if (isMaurizio) {
+    if (isClockingWorker) {
       const today = new Date().toISOString().split('T')[0];
       const q = query(
         collection(db, 'clockEvents'),
@@ -52,7 +52,18 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
       );
 
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const events = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ClockEvent));
+        if (!snapshot || !snapshot.docs) return;
+        const events: ClockEvent[] = [];
+        for (const doc of snapshot.docs) {
+          try {
+            if (!doc || !doc.data || typeof doc.data !== 'function') continue;
+            const data = doc.data();
+            if (!data) continue;
+            events.push({ id: doc.id, ...data } as ClockEvent);
+          } catch (e) {
+            console.error("Error mapping event in AddEntry:", e);
+          }
+        }
         // Sort in memory by timestamp to avoid composite index requirement
         const sortedEvents = events.sort((a, b) => {
           const timeA = a.timestamp?.seconds || 0;
@@ -73,7 +84,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
 
       return () => unsubscribe();
     }
-  }, [isMaurizio, worker.id, worker.azienda_id]);
+  }, [isClockingWorker, worker.id, worker.azienda_id]);
 
   useEffect(() => {
     if (editingEntry) {
@@ -139,12 +150,12 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
     setError('');
 
     try {
-      let ordinaria = isMaurizio ? currentTotalHours : (parseFloat(formData.ordinaria) || 0);
-      const straordinaria = isMaurizio ? 0 : (parseFloat(formData.straordinaria) || 0);
-      const viaggio = isMaurizio ? 0 : (parseFloat(formData.viaggio) || 0);
-      let ferie = isMaurizio ? 0 : (parseFloat(formData.ferie) || 0);
+      let ordinaria = isClockingWorker ? currentTotalHours : (parseFloat(formData.ordinaria) || 0);
+      const straordinaria = isClockingWorker ? 0 : (parseFloat(formData.straordinaria) || 0);
+      const viaggio = isClockingWorker ? 0 : (parseFloat(formData.viaggio) || 0);
+      let ferie = isClockingWorker ? 0 : (parseFloat(formData.ferie) || 0);
       
-      if (!isMaurizio) {
+      if (!isClockingWorker) {
         // 1. Cap ordinary hours at 8
         if (ordinaria > 8) {
           ordinaria = 8;
@@ -158,6 +169,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
 
       // 3. Prevent duplicate entries for the same day for the same worker
       if (!editingEntry?.id) {
+        console.log('Checking for duplicate entry:', { workerId: worker.id, date: formData.date, aziendaId: worker.azienda_id });
         const q = query(
           collection(db, 'timeEntries'),
           where('workerCode', '==', worker.id),
@@ -298,7 +310,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
         </div>
 
       <form onSubmit={handleSubmit} className="space-y-6 sm:space-y-10">
-        {isMaurizio ? (
+        {isClockingWorker ? (
           <div className="space-y-12">
             <div className="flex flex-col items-center justify-center space-y-8 py-12 bg-white border border-slate-200 rounded-[3rem] shadow-2xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-2 bg-slate-100" />
