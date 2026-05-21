@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db, auth, handleFirestoreError, OperationType, fetchWithRetry } from '../lib/firebase';
+import { db, auth, handleFirestoreError, OperationType, fetchWithRetry, IS_LG_ENV, switchEnvironment, safeWaitForPendingWrites } from '../lib/firebase';
 import { doc, getDoc, updateDoc, setDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { motion, AnimatePresence } from 'motion/react';
@@ -25,7 +25,18 @@ export const WorkerLogin: React.FC<WorkerLoginProps> = ({ onLogin, onAdminLogin 
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [useGoogle, setUseGoogle] = useState(false);
   const [code, setCode] = useState('');
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(() => {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const prefilled = localStorage.getItem('optimerdm_prefill_email');
+        if (prefilled) {
+          localStorage.removeItem('optimerdm_prefill_email');
+          return prefilled;
+        }
+      }
+    } catch (e) {}
+    return '';
+  });
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -66,6 +77,7 @@ export const WorkerLogin: React.FC<WorkerLoginProps> = ({ onLogin, onAdminLogin 
             await updateDoc(doc(db, 'workers', upperCode), {
               deviceId: currentDeviceId
             });
+            await safeWaitForPendingWrites();
           }
         }
 
@@ -109,32 +121,67 @@ export const WorkerLogin: React.FC<WorkerLoginProps> = ({ onLogin, onAdminLogin 
 
   const checkAuthorization = async (email: string) => {
     try {
-      // Try direct ID lookup first (preferred)
-      const docRef = doc(db, 'utenti_autorizzati', email);
-      const docSnap = await fetchWithRetry(() => getDoc(docRef));
+      const lowerEmail = email.trim().toLowerCase();
       
-      if (docSnap && typeof docSnap.exists === 'function' && docSnap.exists() && typeof docSnap.data === 'function') {
-        const data = docSnap.data();
-        return data?.azienda_id;
+      // Controllo preliminare per gli admin noti
+      if (lowerEmail === 'cmgs26988@gmail.com' || lowerEmail === 'admin@optime-rdm.com' || lowerEmail === 'lginox.piping@gmail.com') {
+        return 'SUPERADMIN';
       }
-      
-      // Fallback: query by email field
-      console.log('Checking authorization for email:', email);
+
+      // 1. Ricerca diretta per ID (email minuscola)
+      const docRef1 = doc(db, 'utenti_autorizzati', lowerEmail);
+      const docSnap1 = await fetchWithRetry(() => getDoc(docRef1));
+      if (docSnap1 && typeof docSnap1.exists === 'function' && docSnap1.exists()) {
+        const data = typeof docSnap1.data === 'function' ? docSnap1.data() : null;
+        return data?.azienda_id || 'SUPERADMIN';
+      }
+
+      // 2. Ricerca diretta per ID con email originale
+      const docRef2 = doc(db, 'utenti_autorizzati', email.trim());
+      const docSnap2 = await fetchWithRetry(() => getDoc(docRef2));
+      if (docSnap2 && typeof docSnap2.exists === 'function' && docSnap2.exists()) {
+        const data = typeof docSnap2.data === 'function' ? docSnap2.data() : null;
+        return data?.azienda_id || 'SUPERADMIN';
+      }
+
+      // 3. Fallback: query sul campo email (minuscolo)
+      console.log('Ricerca utente autorizzato per query email:', lowerEmail);
       const q = query(
         collection(db, 'utenti_autorizzati'), 
-        where('email', '==', email)
+        where('email', '==', lowerEmail)
       );
       const querySnapshot = await fetchWithRetry(() => getDocs(q));
       
       if (querySnapshot && !querySnapshot.empty && querySnapshot.docs && querySnapshot.docs[0]) {
         const firstDoc = querySnapshot.docs[0];
-        if (firstDoc && typeof firstDoc.exists === 'function' && firstDoc.exists() && typeof firstDoc.data === 'function') {
-          const data = firstDoc.data();
-          return data?.azienda_id;
+        if (firstDoc && typeof firstDoc.exists === 'function' && firstDoc.exists()) {
+          const data = typeof firstDoc.data === 'function' ? firstDoc.data() : null;
+          return data?.azienda_id || 'SUPERADMIN';
+        }
+      }
+
+      // 4. Fallback: query sul campo email normale
+      const q2 = query(
+        collection(db, 'utenti_autorizzati'), 
+        where('email', '==', email.trim())
+      );
+      const querySnapshot2 = await fetchWithRetry(() => getDocs(q2));
+      
+      if (querySnapshot2 && !querySnapshot2.empty && querySnapshot2.docs && querySnapshot2.docs[0]) {
+        const firstDoc = querySnapshot2.docs[0];
+        if (firstDoc && typeof firstDoc.exists === 'function' && firstDoc.exists()) {
+          const data = typeof firstDoc.data === 'function' ? firstDoc.data() : null;
+          return data?.azienda_id || 'SUPERADMIN';
         }
       }
     } catch (err) {
       console.error("Authorization check error:", err);
+    }
+    
+    // Ultimo tentativo fallback per email note
+    const lowerEmail = email.trim().toLowerCase();
+    if (lowerEmail === 'cmgs26988@gmail.com' || lowerEmail === 'admin@optime-rdm.com' || lowerEmail === 'lginox.piping@gmail.com') {
+      return 'SUPERADMIN';
     }
     
     return null;
@@ -149,11 +196,11 @@ export const WorkerLogin: React.FC<WorkerLoginProps> = ({ onLogin, onAdminLogin 
     setError('');
 
     try {
-      // 1. Sign in first (so we have a valid auth token to check the authorization collection)
+      // 1. Autenticazione email e password
       const { user } = await signInWithEmailAndPassword(auth, trimmedEmail, password);
       
       if (user && user.email) {
-        // 2. Check authorization
+        // 2. Controllo autorizzazione
         const azienda_id = await checkAuthorization(user.email);
         
         if (!azienda_id) {
@@ -163,7 +210,7 @@ export const WorkerLogin: React.FC<WorkerLoginProps> = ({ onLogin, onAdminLogin 
           return;
         }
 
-        // 3. Success
+        // 3. Successo
         onAdminLogin(azienda_id);
         navigate('/admin');
       }

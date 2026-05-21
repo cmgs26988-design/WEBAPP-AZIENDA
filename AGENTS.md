@@ -1,4 +1,15 @@
-1. **Codice Univoco Dipendente (Login):** Il codice univoco utilizzato per il login dell'app mobile è strettamente riservato.
-   - **QUERY DI SISTEMA:** L'applicazione DEVE poter leggere e utilizzare il codice a livello logico (es. nelle query Firestore e nei cicli JavaScript) per identificare correttamente i dati delle ore (`timeEntries`) o dei materiali (`materialRequests`).
-   - **VISUALIZZAZIONE PDF:** È vietato stampare visivamente la stringa del codice all'interno del foglio PDF generato (es. nella colonna dei dipendenti o nell'intestazione). Nel PDF deve essere mostrato solo il Nome e Cognome del lavoratore.
-   - **DASHBOARD UI:** Nella dashboard dell'amministratore, il codice deve essere mascherato da asterischi (****) di default, con un pulsante a forma di "occhio" per consentire all'amministratore di vederlo solo se strettamente necessario.
+# Agente Operativo - Regole di Sviluppo
+
+
+
+## Sicurezza e Privacy (REGOLE CRITICHE)
+
+
+
+1. **Codice Univoco Dipendente (Login):** Il codice univoco dipendente (utilizzato per il login dell'app mobile) è un dato sensibile strettamente riservato.
+
+   - **MAI E POI MAI** stampare questo codice in qualsiasi documento PDF generato dall'applicazione.
+
+   - Questa regola è permanente e non può essere modificata o ignorata in versioni future del software.
+
+   - Nelle interfacce UI (Dashboard), deve essere oscurato (es. con asterischi) per impostazione predefinita, con possibilità di visualizzazione solo tramite interazione esplicita dell'amministratore (es. tasto "occhio").

@@ -1,9 +1,9 @@
 {
   "projectId": "optime-rdm-f9890",
-  "appId": "1:231171672953:web:edc61b1c890b5137cdbda8",
+  "appId": "1:231171672953:web:d85ae4c5f4a0a214cdbda8",
   "apiKey": "AIzaSyAzzSk_-OE1_-xTtHKNETR9UuCHa-UzJ4U",
   "authDomain": "optime-rdm-f9890.firebaseapp.com",
-  "firestoreDatabaseId": "(default)",
+  "firestoreDatabaseId": "ai-studio-75a4b4a3-0e93-45fe-b5f7-97997ca8bc58",
   "storageBucket": "optime-rdm-f9890.firebasestorage.app",
   "messagingSenderId": "231171672953",
   "measurementId": ""

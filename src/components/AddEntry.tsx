@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
-import { db, handleFirestoreError, OperationType, fetchWithRetry } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, fetchWithRetry, safeWaitForPendingWrites } from '../lib/firebase';
 import { collection, addDoc, updateDoc, doc, serverTimestamp, query, where, getDocs, orderBy, onSnapshot, limit } from 'firebase/firestore';
 import { format, differenceInMinutes } from 'date-fns';
 import { it } from 'date-fns/locale';
@@ -54,12 +54,12 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
       const unsubscribe = onSnapshot(q, (snapshot) => {
         if (!snapshot || !snapshot.docs) return;
         const events: ClockEvent[] = [];
-        for (const doc of snapshot.docs) {
+        for (const d of snapshot.docs) {
           try {
-            if (!doc || !doc.data || typeof doc.data !== 'function') continue;
-            const data = doc.data();
+            if (!d || !d.data || typeof d.data !== 'function') continue;
+            const data = d.data();
             if (!data) continue;
-            events.push({ id: doc.id, ...data } as ClockEvent);
+            events.push({ id: d.id, ...data } as ClockEvent);
           } catch (e) {
             console.error("Error mapping event in AddEntry:", e);
           }
@@ -137,6 +137,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
         date: new Date().toISOString().split('T')[0]
       };
       await addDoc(collection(db, 'clockEvents'), eventData);
+      await safeWaitForPendingWrites();
     } catch (err: any) {
       handleFirestoreError(err, OperationType.CREATE, 'clockEvents');
     } finally {
@@ -177,7 +178,7 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
           where('date', '==', formData.date)
         );
         const querySnapshot = await fetchWithRetry(() => getDocs(q));
-        if (!querySnapshot.empty) {
+        if (querySnapshot && !querySnapshot.empty) {
           setError('Hai già inserito un report per questa data. Se devi fare modifiche, contatta l\'amministratore.');
           setLoading(false);
           return;
@@ -207,6 +208,8 @@ export const AddEntry: React.FC<AddEntryProps> = ({ worker, onLogout }) => {
         entryData.createdAt = serverTimestamp();
         await addDoc(collection(db, 'timeEntries'), entryData);
       }
+      
+      await safeWaitForPendingWrites();
       
       navigate('/worker/monthly');
     } catch (err: any) {

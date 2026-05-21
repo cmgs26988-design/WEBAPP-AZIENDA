@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { db, handleFirestoreError, OperationType, IS_LG_ENV, IS_TEST_PROJECT } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, IS_LG_ENV, IS_TEST_PROJECT, DEFAULT_AZIENDA_ID } from '../lib/firebase';
 import { collection, query, where, onSnapshot, orderBy, deleteDoc, doc, Timestamp, getDocs } from 'firebase/firestore';
 import { format, startOfMonth, endOfMonth, isBefore, addDays, differenceInMinutes } from 'date-fns';
 import { it } from 'date-fns/locale';
@@ -59,19 +59,17 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
     const currentYear = now.getFullYear();
     const visibilityStartYear = (now.getMonth() === 0) ? currentYear - 1 : currentYear;
 
-    const q = (IS_LG_ENV && !IS_TEST_PROJECT) 
-      ? query(
-          collection(db, 'timeEntries'),
-          where('workerCode', '==', worker.id),
-          where('azienda_id', '==', worker.azienda_id)
-        )
-      : query(
-          collection(db, 'timeEntries'),
-          where('workerCode', '==', worker.id)
-        );
+    const currentAziendaId = worker?.azienda_id || DEFAULT_AZIENDA_ID;
+
+    const q = query(
+      collection(db, 'timeEntries'),
+      where('workerCode', '==', worker?.id || ''),
+      where('azienda_id', '==', currentAziendaId)
+    );
 
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      console.log('Dati estratti per PDF:', querySnapshot?.docs);
+      const docs = querySnapshot && querySnapshot.docs ? querySnapshot.docs : [];
+      console.log('Dati estratti per PDF (IDs):', docs.map(d => d?.id));
       if (!querySnapshot || !querySnapshot.docs) {
         setLoading(false);
         return;
@@ -85,12 +83,13 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
       }
 
       const data: TimeEntry[] = [];
-      for (const doc of querySnapshot.docs) {
+      for (const d of docs) {
         try {
-          if (!doc || !doc.data || typeof doc.data !== 'function') continue;
-          const docData = doc.data();
+          if (!d) continue;
+          if (!d.data || typeof d.data !== 'function') continue;
+          const docData = d.data();
           if (!docData) continue;
-          data.push({ id: doc.id, ...docData } as TimeEntry);
+          data.push({ id: d.id, ...docData } as TimeEntry);
         } catch (e) {
           console.error("Error mapping entry:", e);
         }
@@ -98,10 +97,10 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
       setAllEntries(data);
       
       // Filter by selected month/year
-      const filtered = data.filter(e => e.date >= format(start, 'yyyy-MM-dd') && e.date <= format(end, 'yyyy-MM-dd'));
+      const filtered = data.filter(e => e && e.date && e.date >= format(start, 'yyyy-MM-dd') && e.date <= format(end, 'yyyy-MM-dd'));
       
       // Sort in memory by date ascending
-      const sortedData = filtered.sort((a, b) => a.date.localeCompare(b.date));
+      const sortedData = filtered.sort((a, b) => (a.date && b.date) ? a.date.localeCompare(b.date) : 0);
       setEntries(sortedData);
       setLoading(false);
     }, async (err) => {
@@ -118,19 +117,15 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
 
     let unsubscribeClock: () => void = () => {};
     if (isClockingWorker) {
-      const qClock = (IS_LG_ENV && !IS_TEST_PROJECT)
-        ? query(
-            collection(db, 'clockEvents'),
-            where('workerId', '==', worker.id),
-            where('azienda_id', '==', worker.azienda_id)
-          )
-        : query(
-            collection(db, 'clockEvents'),
-            where('workerId', '==', worker.id)
-          );
+      const qClock = query(
+        collection(db, 'clockEvents'),
+        where('workerId', '==', worker?.id || ''),
+        where('azienda_id', '==', currentAziendaId)
+      );
 
       unsubscribeClock = onSnapshot(qClock, (querySnapshot) => {
-        console.log('Dati estratti per PDF:', querySnapshot?.docs);
+        const docs = querySnapshot && querySnapshot.docs ? querySnapshot.docs : [];
+        console.log('Dati estratti per PDF (IDs):', docs.map(d => d?.id));
         if (!querySnapshot || !querySnapshot.docs) return;
         if (querySnapshot.empty) {
           setClockEvents([]);
@@ -138,12 +133,13 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
         }
 
         const events: ClockEvent[] = [];
-        for (const doc of querySnapshot.docs) {
+        for (const d of docs) {
           try {
-            if (!doc || !doc.data || typeof doc.data !== 'function') continue;
-            const docData = doc.data();
+            if (!d) continue;
+            if (!d.data || typeof d.data !== 'function') continue;
+            const docData = d.data();
             if (!docData) continue;
-            events.push({ id: doc.id, ...docData } as ClockEvent);
+            events.push({ id: d.id, ...docData } as ClockEvent);
           } catch (e) {
             console.error("Error mapping clock event:", e);
           }
@@ -153,7 +149,7 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
         
         // Filter and sort in memory to avoid composite index requirement
         const filteredAndSorted = events
-          .filter(ev => ev.date >= startDateStr && ev.date <= endDateStr)
+          .filter(ev => ev && ev.date && ev.date >= startDateStr && ev.date <= endDateStr)
           .sort((a, b) => {
             const timeA = a.timestamp?.seconds || 0;
             const timeB = b.timestamp?.seconds || 0;
@@ -175,7 +171,7 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
       unsubscribe();
       unsubscribeClock();
     };
-  }, [worker.id, worker.azienda_id, selectedMonth, selectedYear]);
+  }, [worker?.id, worker?.azienda_id, selectedMonth, selectedYear]);
 
   const handleDelete = async (id: string) => {
     setDeleting(true);
@@ -191,54 +187,22 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
   };
 
   const generatePDF = async (mode: 'month' | 'year') => {
-    const q = (IS_LG_ENV && !IS_TEST_PROJECT) 
-      ? query(
-          collection(db, 'timeEntries'),
-          where('workerCode', '==', worker.id),
-          where('azienda_id', '==', worker.azienda_id)
-        )
-      : query(
-          collection(db, 'timeEntries'),
-          where('workerCode', '==', worker.id)
-        );
-
-    let querySnapshot;
-    try {
-      querySnapshot = await getDocs(q);
-    } catch (e) {
-      console.error("Error querying entries for PDF:", e);
-    }
-
-    if (!querySnapshot || querySnapshot.empty) {
-        alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
-        return;
-    }
-
-    const fetchedEntries: TimeEntry[] = [];
-    for (const doc of querySnapshot.docs) {
-      if (doc && doc.exists()) {
-        try {
-          const docData = doc.data();
-          if (docData) {
-            fetchedEntries.push({ id: doc.id, ...docData } as TimeEntry);
-          }
-        } catch (e) {
-          console.error("Error mapping entry doc:", e);
-        }
-      }
-    }
-
     const start = startOfMonth(new Date(parseInt(selectedYear), parseInt(selectedMonth)));
     const end = endOfMonth(new Date(parseInt(selectedYear), parseInt(selectedMonth)));
 
-    const targetEntries = mode === 'month' 
-      ? fetchedEntries.filter(e => e.date >= format(start, 'yyyy-MM-dd') && e.date <= format(end, 'yyyy-MM-dd')) 
-      : fetchedEntries
-          .filter(e => e.date.startsWith(selectedYear))
-          .sort((a, b) => a.date.localeCompare(b.date));
+    const entriesArray = mode === 'month' 
+      ? (entries || []) 
+      : (allEntries || [])
+          .filter(e => e && e.date && e.date.startsWith(selectedYear));
 
-    // Sort entries to make sure they are ordered chronologically
-    const sortedEntries = targetEntries.sort((a, b) => a.date.localeCompare(b.date));
+    // Sort entries to make sure they are ordered chronologically and safely handle potential undefined values or missing dates
+    const sortedEntries = [...entriesArray]
+      .filter(e => e && e.date)
+      .sort((a, b) => {
+        if (!a || !a.date) return 1;
+        if (!b || !b.date) return -1;
+        return a.date.localeCompare(b.date);
+      });
 
     if (!sortedEntries || sortedEntries.length === 0) {
       alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
@@ -296,42 +260,46 @@ export const MonthlyHours: React.FC<MonthlyHoursProps> = ({ worker, onLogout }) 
     doc.setFontSize(12);
     doc.setTextColor(15, 23, 42);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Dipendente: ${worker.name}`, 14, 65);
+    doc.text(`Dipendente: ${worker?.name || '-'}`, 14, 65);
     
     doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(71, 85, 105);
     doc.text(`Data Creazione: ${creationDate}`, 196, 65, { align: 'right' });
 
-    console.log('Dati estratti per PDF (Worker Personal):', targetEntries);
-    console.log('Dati estratti per PDF:', targetEntries);
+    console.log('Dati estratti per PDF (Worker Personal):', sortedEntries);
+    console.log('Dati estratti per PDF:', sortedEntries);
 
-    const totalOrd = targetEntries.reduce((acc, curr) => acc + (curr.ordinaria || 0), 0);
-    const totalStr = targetEntries.reduce((acc, curr) => acc + (curr.straordinaria || 0), 0);
-    const totalVia = targetEntries.reduce((acc, curr) => acc + (curr.viaggio || 0), 0);
-    const totalFer = targetEntries.reduce((acc, curr) => acc + (curr.ferie || 0), 0);
+    const totalOrd = sortedEntries.reduce((acc, curr) => acc + ((curr && curr.ordinaria) || 0), 0);
+    const totalStr = sortedEntries.reduce((acc, curr) => acc + ((curr && curr.straordinaria) || 0), 0);
+    const totalVia = sortedEntries.reduce((acc, curr) => acc + ((curr && curr.viaggio) || 0), 0);
+    const totalFer = sortedEntries.reduce((acc, curr) => acc + ((curr && curr.ferie) || 0), 0);
 
     const tableData = isClockingWorker 
-      ? targetEntries.map(e => {
+      ? sortedEntries.map(e => {
           if (!e || !e.date) return ['-', '-', '-'];
+          const dayEvents = (clockEvents || [])
+            .filter(ce => ce && ce.date === e.date)
+            .sort((a, b) => {
+              if (!a) return 1;
+              if (!b) return -1;
+              const timeA = a.timestamp?.toDate?.()?.getTime() || a.timestamp?.seconds || 0;
+              const timeB = b.timestamp?.toDate?.()?.getTime() || b.timestamp?.seconds || 0;
+              return timeA - timeB;
+            });
+
           return [
             format(new Date(e.date), 'dd/MM/yyyy'),
-            clockEvents
-              .filter(ce => ce && ce.date === e.date)
-              .sort((a, b) => {
-                const timeA = a.timestamp?.toDate?.()?.getTime() || a.timestamp?.seconds || 0;
-                const timeB = b.timestamp?.toDate?.()?.getTime() || b.timestamp?.seconds || 0;
-                return timeA - timeB;
-              })
+            dayEvents
               .map(ev => {
-                const date = ev.timestamp?.toDate?.() || (ev.timestamp?.seconds ? new Date(ev.timestamp.seconds * 1000) : new Date());
-                return `${ev.type || 'TIMBRATA'}: ${format(date, 'HH:mm')}`;
+                const date = ev?.timestamp?.toDate?.() || (ev?.timestamp?.seconds ? new Date(ev.timestamp.seconds * 1000) : new Date());
+                return `${(ev && ev.type) || 'TIMBRATA'}: ${format(date, 'HH:mm')}`;
               })
               .join('\n'),
             formatNumber(e.ordinaria || 0)
           ];
         })
-      : targetEntries.map(e => {
+      : sortedEntries.map(e => {
           if (!e || !e.date) return ['-', '-', '-', '-', '-', '-', '-'];
           return [
             format(new Date(e.date), 'dd/MM/yyyy'),

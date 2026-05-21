@@ -1,79 +1,48 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { 
-  getFirestore,
-} from 'firebase/firestore';
-import firebaseConfigTest from '../../firebase-applet-config.json';
-import firebaseConfigLG from '../../firebase-applet-config-lg.json';
+import { getFirestore, waitForPendingWrites } from 'firebase/firestore';
+import firebaseConfig from '../../firebase-applet-config.json';
 
-// Gestione Ambienti (Test vs LG Inox)
-const getSelectedConfig = () => {
-  try {
-    // 1. Controllo URL (es. ?env=lg o ?env=test)
-    if (typeof window !== 'undefined' && window.location && window.location.search) {
-      const params = new URLSearchParams(window.location.search);
-      const envParam = params.get('env');
-      
-      if (envParam === 'lg' || envParam === 'test') {
-        try {
-          if (typeof localStorage !== 'undefined') {
-            localStorage.setItem('optimerdm_env', envParam);
-          }
-        } catch (e) {
-          console.warn("localStorage not available for saving env", e);
-        }
-        return envParam === 'lg' ? firebaseConfigLG : firebaseConfigTest;
-      }
-    }
+// Configurazione unica, stabile e centralizzata sul nuovo database
+export const IS_LG_ENV = false;
+export const currentEnv = 'TEST (Database Dedicato)';
+export const DEFAULT_AZIENDA_ID = 'test_azienda';
 
-    // 2. Controllo localStorage per persistenza
-    try {
-      if (typeof localStorage !== 'undefined') {
-        const savedEnv = localStorage.getItem('optimerdm_env');
-        if (savedEnv === 'lg') return firebaseConfigLG;
-      }
-    } catch (e) {
-      console.warn("localStorage not accessible for reading env", e);
-    }
-  } catch (e) {
-    console.error("Error in environment detection:", e);
-  }
-  
-  // 3. Default: Progetto di Test
-  return firebaseConfigTest;
-};
-
-const firebaseConfig = getSelectedConfig();
-
-let isLgEnv = false;
-try {
-  if (typeof localStorage !== 'undefined') {
-    isLgEnv = localStorage.getItem('optimerdm_env') === 'lg';
-  }
-} catch (e) {
-  console.warn("Error checking environment in localStorage:", e);
+export function switchEnvironment(env: 'lg' | 'test') {
+  console.log("[Firebase] Ambiente centralizzato su database unico. Switch disabilitato.");
 }
-export const IS_LG_ENV = isLgEnv;
-export const currentEnv = IS_LG_ENV ? 'LG INOX' : 'TEST (Sviluppo)';
-export const DEFAULT_AZIENDA_ID = IS_LG_ENV ? 'lg_inox' : 'test_azienda';
 
-console.log(`[Firebase] Avvio app in ambiente: ${currentEnv}`);
+console.log(`[Firebase] Avvio app in ambiente unico: ${currentEnv}`);
 console.log(`[Firebase] Project ID: ${firebaseConfig.projectId}`);
+console.log(`[Firebase] Target Database: ${firebaseConfig.firestoreDatabaseId || "ai-studio-75a4b4a3-0e93-45fe-b5f7-97997ca8bc58"}`);
 
-export const IS_TEST_PROJECT = firebaseConfig.projectId?.includes('test') || firebaseConfig.projectId?.includes('dev') || !firebaseConfig.projectId?.includes('lg-inox');
+export const IS_TEST_PROJECT = true;
 
-// Initialize Firebase app
+// Inizializzazione Firebase App
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore
-const configDatabaseId = (firebaseConfig as any).firestoreDatabaseId;
-export const db = configDatabaseId && configDatabaseId !== '(default)' 
-  ? getFirestore(app, configDatabaseId) 
-  : getFirestore(app);
+// INIZIALIZZAZIONE FIRESTORE: Utilizza il database corretto specificato in configurazione con fallback su "ai-studio-75a4b4a3-0e93-45fe-b5f7-97997ca8bc58"
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || "ai-studio-75a4b4a3-0e93-45fe-b5f7-97997ca8bc58");
 
 export const auth = getAuth(app);
 
-// Error handler as per requirements
+/**
+ * Safe helper to wait for pending writes with a timeout fallback
+ * Previene il crash del metodo .toJSON() attendendo che le scritture locali siano sincronizzate
+ */
+export async function safeWaitForPendingWrites(): Promise<void> {
+  try {
+    await Promise.race([
+      waitForPendingWrites(db),
+      new Promise(resolve => setTimeout(resolve, 1000))
+    ]);
+    console.log('[Firebase] safeWaitForPendingWrites checks completed.');
+  } catch (err) {
+    console.warn('[Firebase] safeWaitForPendingWrites timed out or failed:', err);
+  }
+}
+
+// Gestione Errori e Strumenti di Connessione (Mantenuti per la stabilità dell'applicazione)
 export enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',
@@ -104,7 +73,7 @@ export async function fetchWithRetry<T>(fn: () => Promise<T>, retries = 3, delay
       lastError = err;
       const message = err.message || '';
       if (message.includes('the client is offline') || message.includes('failed-precondition') || message.includes('unavailable')) {
-        console.warn(`[Firestore] Attempt ${i + 1} failed due to connectivity. Retrying...`, message);
+        console.warn(`[Firestore] Tentativo ${i + 1} fallito per connettività. Riprovo...`, message);
         if (i < retries - 1) {
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;
@@ -134,9 +103,8 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   const jsonError = JSON.stringify(errInfo);
   console.error('Firestore Error: ', jsonError);
   
-  // Specific feedback for the user check in requirements
   if (message.includes('the client is offline') || message.includes('failed-precondition')) {
-    console.error("Please check your Firebase configuration. The client appears to be offline or the connection was refused.");
+    console.error("Verifica la configurazione di Firebase. Il client sembra offline o connessione rifiutata.");
   }
 
   throw new Error(jsonError);

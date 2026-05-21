@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db, handleFirestoreError, OperationType, IS_LG_ENV, DEFAULT_AZIENDA_ID, IS_TEST_PROJECT } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, IS_LG_ENV, DEFAULT_AZIENDA_ID, IS_TEST_PROJECT, safeWaitForPendingWrites } from '../lib/firebase';
 import { collection, query, onSnapshot, doc, setDoc, deleteDoc, orderBy, serverTimestamp, where, getDocs } from 'firebase/firestore';
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, getDaysInMonth } from 'date-fns';
 import { it } from 'date-fns/locale';
@@ -108,7 +108,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
 
     const unsubWorkers = onSnapshot(workersQuery, (querySnapshot) => {
       setLoading(false);
-      console.log('Dati estratti per PDF:', querySnapshot?.docs);
+      console.log('Dati estratti per PDF (IDs):', querySnapshot?.docs?.map(d => d.id));
       if (!querySnapshot || !querySnapshot.docs) return;
       if (querySnapshot.empty) {
         setWorkers([]);
@@ -137,7 +137,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
       : query(collection(db, 'timeEntries'), where('azienda_id', '==', adminAziendaId));
 
     const unsubEntries = onSnapshot(entriesQuery, (querySnapshot) => {
-      console.log('Dati estratti per PDF:', querySnapshot?.docs);
+      console.log('Dati estratti per PDF (IDs):', querySnapshot?.docs?.map(d => d.id));
       if (!querySnapshot || !querySnapshot.docs) {
         setLoading(false);
         return;
@@ -158,7 +158,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
           console.error("Error mapping entry doc:", e);
         }
       }
-      const sortedData = data.sort((a, b) => a.date.localeCompare(b.date));
+      const sortedData = data.sort((a, b) => (a.date && b.date) ? a.date.localeCompare(b.date) : 0);
       setEntries(sortedData);
       setLoading(false);
     }, (err) => {
@@ -172,7 +172,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
       : query(collection(db, 'materialRequests'), where('azienda_id', '==', adminAziendaId));
 
     const unsubMaterial = onSnapshot(materialQuery, (querySnapshot) => {
-      console.log('Dati estratti per PDF:', querySnapshot?.docs);
+      console.log('Dati estratti per PDF (IDs):', querySnapshot?.docs?.map(d => d.id));
       if (!querySnapshot || !querySnapshot.docs) return;
       if (querySnapshot.empty) {
         setMaterialRequests([]);
@@ -205,7 +205,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
       : query(collection(db, 'clockEvents'), where('azienda_id', '==', adminAziendaId));
 
     const unsubClock = onSnapshot(clockQuery, (querySnapshot) => {
-      console.log('Dati estratti per PDF:', querySnapshot?.docs);
+      console.log('Dati estratti per PDF (IDs):', querySnapshot?.docs?.map(d => d.id));
       if (!querySnapshot || !querySnapshot.docs) return;
       if (querySnapshot.empty) {
         setClockEvents([]);
@@ -259,9 +259,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
   };
 
   const filteredEntries = entries.filter(e => {
+    if (!e || !e.date) return false;
     const isDateMatch = e.date >= dateFrom && e.date <= dateTo;
-    const isSiteMatch = siteFilter ? e.cantiere.toLowerCase().includes(siteFilter.toLowerCase()) : true;
-    const isWorkerMatch = workerFilter ? e.workerName.toLowerCase().includes(workerFilter.toLowerCase()) || e.workerCode === workerFilter : true;
+    const isSiteMatch = siteFilter && e.cantiere ? e.cantiere.toLowerCase().includes(siteFilter.toLowerCase()) : true;
+    const isWorkerMatch = workerFilter && e.workerName ? e.workerName.toLowerCase().includes(workerFilter.toLowerCase()) || e.workerCode === workerFilter : true;
     return isDateMatch && isSiteMatch && isWorkerMatch;
   });
 
@@ -298,7 +299,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
         ? 'lg_inox' 
         : (adminAziendaId === 'SUPERADMIN' ? DEFAULT_AZIENDA_ID : adminAziendaId);
 
-      await setDoc(doc(db, 'workers', trimmedCode), { 
+      const workerData = { 
         id: trimmedCode,
         name: trimmedName,
         photoUrl: newWorkerPhoto.trim(),
@@ -307,7 +308,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
         createdAt: editingWorkerId ? existingWorker?.createdAt || new Date().toISOString() : new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         ...workerFormData
-      }, { merge: true });
+      };
+
+      await setDoc(doc(db, "workers", trimmedCode), workerData, { merge: true });
+      
+      await safeWaitForPendingWrites();
       
       console.log('Worker processed successfully');
       setShowAddWorker(false);
@@ -317,13 +322,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
       setNewWorkerPhoto('');
       setWorkerFormData({});
       showStatus('success', editingWorkerId ? 'Dipendente aggiornato.' : 'Dipendente aggiunto!');
-    } catch (err) {
-      console.error('Add worker error:', err);
-      try {
-        handleFirestoreError(err, OperationType.WRITE, `workers/${trimmedCode}`);
-      } catch (e) {
-        alert('Errore durante la creazione del dipendente. Verifica i permessi o la connessione.');
-      }
+    } catch (error: any) {
+      alert("ERRORE REALE DI SCRITTURA FIRESTORE: " + error.message);
+      console.error("Firestore Save Error:", error);
     } finally {
       setSubmittingWorker(false);
     }
@@ -335,6 +336,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
       await setDoc(doc(db, 'workers', id), { 
         deviceId: '' 
       }, { merge: true });
+      await safeWaitForPendingWrites();
       showStatus('success', 'Dispositivo resettato con successo.');
       setResetWorkerId(null);
     } catch (err) {
@@ -353,6 +355,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     setConfirmDeleteLoading(true);
     try {
       await deleteDoc(doc(db, 'workers', id));
+      await safeWaitForPendingWrites();
       showStatus('success', 'Dipendente eliminato.');
       setDeleteWorkerId(null);
       if (editingWorkerId === id) {
@@ -372,49 +375,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
   };
 
   const generateReportPDF = async () => {
-    const q = (adminAziendaId === 'SUPERADMIN' || IS_TEST_PROJECT)
-      ? query(collection(db, 'timeEntries'))
-      : query(collection(db, 'timeEntries'), where('azienda_id', '==', adminAziendaId));
-
-    let querySnapshot;
-    try {
-      querySnapshot = await getDocs(q);
-    } catch (e) {
-      console.error("Error fetching report data:", e);
-    }
-
-    if (!querySnapshot || querySnapshot.empty) {
-        alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
-        return;
-    }
-
-    const fetchedEntries: TimeEntry[] = [];
-    for (const doc of querySnapshot.docs) {
-      if (doc && doc.exists()) {
-        try {
-          const docData = doc.data();
-          if (docData) {
-            fetchedEntries.push({ id: doc.id, ...docData } as TimeEntry);
-          }
-        } catch (e) {
-          console.error("Error mapping entry:", e);
-        }
-      }
-    }
-
-    const reportEntries = fetchedEntries
-      .filter(e => {
-        const isDateMatch = e.date >= dateFrom && e.date <= dateTo;
-        const isSiteMatch = siteFilter ? e.cantiere.toLowerCase().includes(siteFilter.toLowerCase()) : true;
-        const isWorkerMatch = workerFilter ? e.workerName.toLowerCase().includes(workerFilter.toLowerCase()) || e.workerCode === workerFilter : true;
-        return isDateMatch && isSiteMatch && isWorkerMatch;
-      })
-      .sort((a, b) => a.date.localeCompare(b.date));
-
-    if (reportEntries.length === 0) {
+    if (!filteredEntries || filteredEntries.length === 0) {
       alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
       return;
     }
+
+    const reportEntries = [...filteredEntries].sort((a, b) => (a.date && b.date) ? a.date.localeCompare(b.date) : 0);
 
     const doc = new jsPDF('l', 'mm', 'a4');
     const creationDate = format(new Date(), 'dd/MM/yyyy HH:mm', { locale: it });
@@ -520,44 +486,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
   };
 
   const generateWorkerPDF = async (worker: Worker, targetEntries: TimeEntry[]) => {
-    const q = (adminAziendaId === 'SUPERADMIN' || IS_TEST_PROJECT)
-      ? query(collection(db, 'timeEntries'), where('workerCode', '==', worker.id))
-      : query(collection(db, 'timeEntries'), where('workerCode', '==', worker.id), where('azienda_id', '==', adminAziendaId));
-
-    let querySnapshot;
-    try {
-      querySnapshot = await getDocs(q);
-    } catch (e) {
-      console.error("Error fetching worker entries for PDF:", e);
+    if (!worker || !worker.id) {
+      alert("Dati dipendente non validi. Impossibile generare il PDF.");
+      return;
     }
-
-    if (!querySnapshot || querySnapshot.empty) {
-        alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
-        return;
-    }
-
-    const fetchedEntries: TimeEntry[] = [];
-    for (const d of querySnapshot.docs) {
-      if (d && d.exists()) {
-        try {
-          const docData = d.data();
-          if (docData) {
-            fetchedEntries.push({ id: d.id, ...docData } as TimeEntry);
-          }
-        } catch (e) {
-          console.error("Error mapping entry doc:", e);
-        }
-      }
-    }
-
-    const finalEntries = fetchedEntries
-      .filter(e => e.date >= dateFrom && e.date <= dateTo)
-      .sort((a, b) => a.date.localeCompare(b.date));
-
-    if (finalEntries.length === 0) {
+    const workerEntries = targetEntries.filter(e => e && e.workerCode === worker.id && e.date && e.date >= dateFrom && e.date <= dateTo);
+    if (!workerEntries || workerEntries.length === 0) {
       alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
       return;
     }
+
+    const finalEntries = [...workerEntries].sort((a, b) => (a.date && b.date) ? a.date.localeCompare(b.date) : 0);
 
     const doc = new jsPDF();
     const creationDate = format(new Date(), 'dd/MM/yyyy HH:mm', { locale: it });
@@ -629,18 +568,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     const tableData = isClockingWorker(worker.name)
       ? finalEntries.map(e => {
           if (!e || !e.date) return ['-', '-', '-'];
+          const dayEvents = (clockEvents || [])
+            .filter(ce => ce && ce.workerId === e.workerCode && ce.date === e.date)
+            .sort((a, b) => {
+              if (!a) return 1;
+              if (!b) return -1;
+              const timeA = a.timestamp?.toDate?.()?.getTime() || a.timestamp?.seconds || 0;
+              const timeB = b.timestamp?.toDate?.()?.getTime() || b.timestamp?.seconds || 0;
+              return timeA - timeB;
+            });
+
           return [
             format(new Date(e.date), 'dd/MM/yyyy'),
-            clockEvents
-              .filter(ce => ce.workerId === e.workerCode && ce.date === e.date)
-              .sort((a, b) => {
-                const timeA = a.timestamp?.toDate?.()?.getTime() || a.timestamp?.seconds || 0;
-                const timeB = b.timestamp?.toDate?.()?.getTime() || b.timestamp?.seconds || 0;
-                return timeA - timeB;
-              })
+            dayEvents
               .map(ev => {
-                const date = ev.timestamp?.toDate?.() || (ev.timestamp?.seconds ? new Date(ev.timestamp.seconds * 1000) : new Date());
-                return `${ev.type || 'EVENTO'}: ${format(date, 'HH:mm')}`;
+                const date = ev?.timestamp?.toDate?.() || (ev?.timestamp?.seconds ? new Date(ev.timestamp.seconds * 1000) : new Date());
+                return `${(ev && ev.type) || 'EVENTO'}: ${format(date, 'HH:mm')}`;
               })
               .join('\n'),
             formatNumber(e.ordinaria || 0)
@@ -879,6 +822,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
       return;
     }
 
+    const safeFormatDate = (dateStr: string | undefined | null) => {
+      if (!dateStr) return '-';
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '-';
+        return format(d, 'dd/MM/yyyy');
+      } catch (e) {
+        return '-';
+      }
+    };
+
     const q = (adminAziendaId === 'SUPERADMIN' || IS_TEST_PROJECT)
       ? query(collection(db, 'timeEntries'))
       : query(collection(db, 'timeEntries'), where('azienda_id', '==', adminAziendaId));
@@ -896,12 +850,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     }
 
     const fetchedEntries: TimeEntry[] = [];
-    for (const doc of querySnapshot.docs) {
-      if (doc && doc.exists()) {
+    for (const d of querySnapshot.docs) {
+      if (d && typeof d.data === 'function') {
         try {
-          const docData = doc.data();
+          const docData = d.data();
           if (docData) {
-            fetchedEntries.push({ id: doc.id, ...docData } as TimeEntry);
+            fetchedEntries.push({ id: d.id, ...docData } as TimeEntry);
           }
         } catch (e) {
           console.error("Error mapping entry:", e);
@@ -914,7 +868,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
     const sStr = format(mStart, 'yyyy-MM-dd');
     const eStr = format(mEnd, 'yyyy-MM-dd');
 
-    const monthlyEntriesAll = fetchedEntries.filter(e => e.date >= sStr && e.date <= eStr);
+    const monthlyEntriesAll = fetchedEntries.filter(e => e && e.date && e.date >= sStr && e.date <= eStr);
 
     if (monthlyEntriesAll.length === 0) {
       alert("Nessun dato trovato per i filtri selezionati. Impossibile generare il PDF.");
@@ -1026,11 +980,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
         { label: 'POS. INAIL:', value: group.worker.posizioneInail || '-' },
         { label: 'LIVELLO:', value: group.worker.livelloMansione || '-' },
         { label: 'COD. FISCALE:', value: group.worker.codiceFiscale || '-' },
-        { label: 'DATA NASCITA:', value: group.worker.dataNascita ? format(new Date(group.worker.dataNascita), 'dd/MM/yyyy') : '-' },
-        { label: 'DATA ASSUNZIONE:', value: group.worker.dataAssunzione ? format(new Date(group.worker.dataAssunzione), 'dd/MM/yyyy') : '-' },
-        { label: 'DATA CESSAZIONE:', value: group.worker.dataCessazione ? format(new Date(group.worker.dataCessazione), 'dd/MM/yyyy') : '-' },
-        { label: 'FINE T. DET.:', value: group.worker.dataFineTempoDeterminato ? format(new Date(group.worker.dataFineTempoDeterminato), 'dd/MM/yyyy') : '-' },
-        { label: 'PROSSIMO SCATTO:', value: group.worker.dataProssimoScatto ? format(new Date(group.worker.dataProssimoScatto), 'dd/MM/yyyy') : '-' },
+        { label: 'DATA NASCITA:', value: safeFormatDate(group.worker.dataNascita) },
+        { label: 'DATA ASSUNZIONE:', value: safeFormatDate(group.worker.dataAssunzione) },
+        { label: 'DATA CESSAZIONE:', value: safeFormatDate(group.worker.dataCessazione) },
+        { label: 'FINE T. DET.:', value: safeFormatDate(group.worker.dataFineTempoDeterminato) },
+        { label: 'PROSSIMO SCATTO:', value: safeFormatDate(group.worker.dataProssimoScatto) },
         { label: 'N. SCATTI:', value: group.worker.nScatti || '-' },
         { label: 'RETR. O/M:', value: group.worker.retrOM || '-' }
       ];
@@ -1256,6 +1210,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
             status: 'IN VERIFICA', 
             updatedAt: serverTimestamp() 
           }, { merge: true });
+          await safeWaitForPendingWrites();
           // Note: we don't need to manually update local state as the onSnapshot will trigger a refresh
           // but updating local state makes it feel faster
           setSelectedMaterialDetail(prev => prev ? { ...prev, status: 'IN VERIFICA' } : null);
@@ -1273,6 +1228,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
         status: newStatus, 
         updatedAt: serverTimestamp() 
       }, { merge: true });
+      await safeWaitForPendingWrites();
       setSelectedMaterialDetail(prev => prev ? { ...prev, status: newStatus as any } : null);
       showStatus('success', `Stato ordine aggiornato a: ${newStatus}`);
     } catch (err) {
@@ -1383,6 +1339,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
         pdfGenerated: true,
         updatedAt: serverTimestamp() 
       }, { merge: true });
+      await safeWaitForPendingWrites();
       setSelectedMaterialDetail(prev => prev ? { ...prev, pdfGenerated: true } : null);
     } catch (err) {
       console.error("Error updating pdfGenerated status:", err);
@@ -1801,7 +1758,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
                         onClick={() => {
                           if (filterMode === 'dipendente' && selectedWorkerId) {
                             const worker = workers.find(w => w.id === selectedWorkerId);
-                            if (worker) generateWorkerPDF(worker, filteredEntries);
+                            if (worker) {
+                              generateWorkerPDF(worker, filteredEntries);
+                            } else {
+                              alert("Errore: Dipendente selezionato non trovato nei registri per creare il PDF.");
+                            }
                           } else {
                             generateReportPDF();
                           }
@@ -2584,19 +2545,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, adminA
                   <div className="mt-8 space-y-4">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2">TIMBRATURE EFFETTUATE</label>
                     <div className="flex flex-wrap gap-2">
-                      {clockEvents
-                        .filter(ce => ce.workerId === selectedEntryDetail.workerCode && ce.date === selectedEntryDetail.date)
+                      {(clockEvents || [])
+                        .filter(ce => ce && ce.workerId === selectedEntryDetail.workerCode && ce.date === selectedEntryDetail.date)
                         .sort((a, b) => {
+                          if (!a) return 1;
+                          if (!b) return -1;
                           const timeA = a.timestamp?.toDate?.()?.getTime() || 0;
                           const timeB = b.timestamp?.toDate?.()?.getTime() || 0;
                           return timeA - timeB;
                         })
                         .map((ev, idx) => (
                           <div key={idx} className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-2 ${
-                            ev.type === 'ENTRATA' ? 'bg-green-50 text-green-600 border border-green-100' : 'bg-red-50 text-red-600 border border-red-100'
+                            ev && ev.type === 'ENTRATA' ? 'bg-green-50 text-green-600 border border-green-100' : 'bg-red-50 text-red-600 border border-red-100'
                           }`}>
                             <Clock className="w-4 h-4" />
-                            {ev.type}: {ev.timestamp?.toDate ? format(ev.timestamp.toDate(), 'HH:mm') : '--:--'}
+                            {ev && ev.type}: {ev?.timestamp?.toDate ? format(ev.timestamp.toDate(), 'HH:mm') : '--:--'}
                           </div>
                       ))}
                     </div>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { db, auth, fetchWithRetry } from './lib/firebase';
-import { doc, getDoc, query, where, getDocs, collection } from 'firebase/firestore';
+import { doc, getDoc, query, where, getDocs, collection, getDocFromServer } from 'firebase/firestore';
 import { WorkerLogin } from './components/WorkerLogin';
 import { WorkerDashboard } from './components/WorkerDashboard';
 import { AddEntry } from './components/AddEntry';
@@ -40,15 +40,13 @@ export default function App() {
     // Test connection as per platform guidelines to wake up Firestore
     const testConnection = async () => {
       try {
-        await fetchWithRetry(() => getDoc(doc(db, 'test', 'connection')));
-        console.log("Firestore connection verified.");
+        // We query the permitted 'workers' collection to test server connectivity and wake up the instance.
+        // We use standard getDoc which can fall back to local cache if the connection is establishing or offline.
+        await fetchWithRetry(() => getDoc(doc(db, 'workers', 'connection_test_doc')));
+        console.log("[Firestore] Connessione al server verificata o cache attiva.");
       } catch (error: any) {
-        // If it's just "not found", it's actually a success in terms of connectivity
-        if (error.message && !error.message.includes('the client is offline')) {
-          console.log("Connectivity reached Firestore (but document not found or other non-offline error).");
-          return;
-        }
-        console.error("Firestore connection could not be established after retries.");
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.warn("[Firestore] Database offline o in fase di connessione. Attiva modalità resiliente offline:", errorMsg);
       }
     };
     testConnection();
@@ -57,41 +55,80 @@ export default function App() {
       setUserEmail(user?.email || null);
       if (user && user.email) {
         try {
-          // Try direct ID lookup first
-          const docRef = doc(db, 'utenti_autorizzati', user.email);
-          const docSnap = await fetchWithRetry(() => getDoc(docRef));
-          
+          const lowerEmail = user.email.trim().toLowerCase();
           let aziendaId = null;
-          
-          if (docSnap && typeof docSnap.exists === 'function' && docSnap.exists() && typeof docSnap.data === 'function') {
-            const docData = docSnap.data();
-            if (docData) {
-              aziendaId = docData.azienda_id;
+          let found = false;
+
+          // Controllo preliminare per gli admin noti
+          if (lowerEmail === 'cmgs26988@gmail.com' || lowerEmail === 'admin@optime-rdm.com' || lowerEmail === 'lginox.piping@gmail.com') {
+            aziendaId = 'SUPERADMIN';
+            found = true;
+          }
+
+          if (!found) {
+            // 1. Ricerca diretta per ID con email minuscola
+            const docRef = doc(db, 'utenti_autorizzati', lowerEmail);
+            const docSnap = await fetchWithRetry(() => getDoc(docRef));
+            
+            if (docSnap && typeof docSnap.exists === 'function' && docSnap.exists()) {
+              found = true;
+              const docData = typeof docSnap.data === 'function' ? docSnap.data() : null;
+              aziendaId = docData?.azienda_id || 'SUPERADMIN';
             }
-          } else {
-            // Fallback: check authorized users collection by email query
-            const q = query(collection(db, 'utenti_autorizzati'), where('email', '==', user.email));
+          }
+
+          if (!found) {
+            // 2. Ricerca diretta per ID con email originale
+            const docRefOriginal = doc(db, 'utenti_autorizzati', user.email.trim());
+            const docSnapOriginal = await fetchWithRetry(() => getDoc(docRefOriginal));
+            
+            if (docSnapOriginal && typeof docSnapOriginal.exists === 'function' && docSnapOriginal.exists()) {
+              found = true;
+              const docData = typeof docSnapOriginal.data === 'function' ? docSnapOriginal.data() : null;
+              aziendaId = docData?.azienda_id || 'SUPERADMIN';
+            }
+          }
+
+          if (!found) {
+            // 3. Fallback: query sul campo email (minuscolo)
+            const q = query(collection(db, 'utenti_autorizzati'), where('email', '==', lowerEmail));
             const querySnapshot = await fetchWithRetry(() => getDocs(q));
             
             if (querySnapshot && !querySnapshot.empty && querySnapshot.docs && querySnapshot.docs[0]) {
               const firstDoc = querySnapshot.docs[0];
-              if (firstDoc && typeof firstDoc.exists === 'function' && firstDoc.exists() && typeof firstDoc.data === 'function') {
-                const firstDocData = firstDoc.data();
-                if (firstDocData) {
-                  aziendaId = firstDocData.azienda_id;
-                }
+              if (firstDoc && typeof firstDoc.exists === 'function' && firstDoc.exists()) {
+                found = true;
+                const firstDocData = typeof firstDoc.data === 'function' ? firstDoc.data() : null;
+                aziendaId = firstDocData?.azienda_id || 'SUPERADMIN';
               }
             }
           }
 
-          // Fallback per i Super Admin hardcoded (es. cmgs26988@gmail.com)
-          if (!aziendaId && (user.email === 'cmgs26988@gmail.com' || user.email === 'admin@optime-rdm.com')) {
-            aziendaId = 'SUPERADMIN';
+          if (!found) {
+            // 4. Fallback: query sul campo email originale
+            const qOriginal = query(collection(db, 'utenti_autorizzati'), where('email', '==', user.email.trim()));
+            const querySnapshotOriginal = await fetchWithRetry(() => getDocs(qOriginal));
+            
+            if (querySnapshotOriginal && !querySnapshotOriginal.empty && querySnapshotOriginal.docs && querySnapshotOriginal.docs[0]) {
+              const firstDoc = querySnapshotOriginal.docs[0];
+              if (firstDoc && typeof firstDoc.exists === 'function' && firstDoc.exists()) {
+                found = true;
+                const firstDocData = typeof firstDoc.data === 'function' ? firstDoc.data() : null;
+                aziendaId = firstDocData?.azienda_id || 'SUPERADMIN';
+              }
+            }
           }
 
-          if (aziendaId) {
-            setAdminAziendaId(aziendaId);
-            localStorage.setItem('optimerdm_admin_azienda_id', aziendaId);
+          // Ultimo fallback di controllo mail note
+          if (lowerEmail === 'cmgs26988@gmail.com' || lowerEmail === 'admin@optime-rdm.com' || lowerEmail === 'lginox.piping@gmail.com') {
+            aziendaId = 'SUPERADMIN';
+            found = true;
+          }
+
+          if (found) {
+            const finalAziendaId = aziendaId || 'SUPERADMIN';
+            setAdminAziendaId(finalAziendaId);
+            localStorage.setItem('optimerdm_admin_azienda_id', finalAziendaId);
             setIsAdmin(true);
           } else {
             // Not authorized

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { db, handleFirestoreError, OperationType, fetchWithRetry, IS_TEST_PROJECT } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, fetchWithRetry, IS_TEST_PROJECT, safeWaitForPendingWrites } from '../lib/firebase';
 import { 
   collection, 
   addDoc, 
@@ -575,6 +575,8 @@ export const MaterialRequest: React.FC<MaterialRequestProps> = ({ worker, onBack
         await addDoc(collection(db, 'materialRequests'), requestData);
       }
       
+      await safeWaitForPendingWrites();
+      
       if (status === 'draft') {
         // Just go back to hub if draft
         setCart([]);
@@ -722,12 +724,12 @@ export const MaterialRequest: React.FC<MaterialRequestProps> = ({ worker, onBack
       }
 
       const docs: MaterialRequestType[] = [];
-      for (const doc of snapshot.docs) {
+      for (const d of snapshot.docs) {
         try {
-          if (!doc || !doc.data || typeof doc.data !== 'function') continue;
-          const data = doc.data();
+          if (!d || !d.data || typeof d.data !== 'function') continue;
+          const data = d.data();
           if (!data) continue;
-          docs.push({ id: doc.id, ...data } as MaterialRequestType);
+          docs.push({ id: d.id, ...data } as MaterialRequestType);
         } catch (e) {
           console.error("Error mapping document in MaterialRequest:", e);
         }

@@ -4,7 +4,7 @@ import {
   Headset, Send, List, AlertCircle, Sparkles, CheckCircle2, 
   Clock, ArrowLeft, User, Building, Calendar, X
 } from 'lucide-react';
-import { db, handleFirestoreError, OperationType, auth } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType, auth, safeWaitForPendingWrites } from '../lib/firebase';
 import { collection, query, onSnapshot, doc, updateDoc, orderBy, serverTimestamp, addDoc, deleteDoc } from 'firebase/firestore';
 import { format } from 'date-fns';
 import { it } from 'date-fns/locale';
@@ -93,13 +93,13 @@ export const FeedbackModule: React.FC<FeedbackModuleProps> = ({ onBack, userEmai
       const unsubscribe = onSnapshot(q, (snapshot) => {
         if (!snapshot || !snapshot.docs) return;
         let data: Feedback[] = [];
-        for (const doc of snapshot.docs) {
+        for (const d of snapshot.docs) {
           try {
-            if (!doc || !doc.data || typeof doc.data !== 'function') continue;
-            const docData = doc.data();
+            if (!d || !d.data || typeof d.data !== 'function') continue;
+            const docData = d.data();
             if (!docData) continue;
             data.push({
-              id: doc.id,
+              id: d.id,
               ...docData
             } as any);
           } catch (e) {
@@ -145,6 +145,7 @@ export const FeedbackModule: React.FC<FeedbackModuleProps> = ({ onBack, userEmai
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+      await safeWaitForPendingWrites();
       setSuccess(true);
       setTimeout(() => {
         setSubView('menu');
@@ -167,6 +168,7 @@ export const FeedbackModule: React.FC<FeedbackModuleProps> = ({ onBack, userEmai
         status: newStatus,
         updatedAt: serverTimestamp()
       });
+      await safeWaitForPendingWrites();
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'feedback');
     }

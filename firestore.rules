@@ -2,85 +2,55 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Helper functions
+    // Funzioni helper per la sicurezza del database di TEST
     function isSignedIn() {
       return request.auth != null;
     }
     
-    function getUserEmail() {
-      return request.auth != null && request.auth.token != null && 'email' in request.auth.token ? request.auth.token.email : null;
-    }
-    
-    function isSuperAdmin() {
-      return isSignedIn() && getUserEmail() != null && (
-        getUserEmail() == 'cmgs26988@gmail.com' ||
-        getUserEmail() == 'admin@optime-rdm.com'
-      );
+    // Qui il SuperAdmin sei TU con la tua mail di test
+    function isIoSviluppatore() {
+      return isSignedIn() && request.auth.token.email == 'cmgs26988@gmail.com';
     }
 
-    function adminHasAzienda(aziendaId) {
-      return isSignedIn() && 
-             getUserEmail() != null && 
-             exists(/databases/$(database)/documents/utenti_autorizzati/$(getUserEmail())) &&
-             get(/databases/$(database)/documents/utenti_autorizzati/$(getUserEmail())).data.azienda_id == aziendaId;
-    }
-
-    // WORKERS - Accessibile pubblicamente per login operaio
-    match /workers/{workerId} {
-      allow get, list: if true; 
-      allow update: if true; 
-      allow create: if isSuperAdmin() || (isSignedIn() && adminHasAzienda(request.resource.data.azienda_id));
-      allow delete: if isSuperAdmin();
-    }
-
-    // UTENTI AUTORIZZATI - Accessibile per il controllo admin (lettura pubblica per verifica iniziale)
+    // 1. UTENTI AUTORIZZATI (Admin)
     match /utenti_autorizzati/{docId} {
-      allow get, list: if true; 
-      allow write: if isSuperAdmin();
+      allow get: if true; 
+      allow list, write: if isIoSviluppatore();
+    }
+
+    // 2. WORKERS (I codici d'accesso dei dipendenti)
+    match /workers/{workerId} {
+      allow read, write: if true; // <--- Cambiala così!
+    }
+
+    // 3. TIME ENTRIES (Registrazioni ore storiche)
+    match /timeEntries/{entryId} {
+      allow read, create: if true; 
+      allow update, delete: if isIoSviluppatore(); 
     }
     
-    // TEST - Per verifica connessione
-    match /test/{docId} {
-      allow read: if true;
-    }
-
-    // TIME ENTRIES - Registrazioni ore
-    match /timeEntries/{entryId} {
-      allow read: if true; 
-      allow create: if true;
-      allow update, delete: if isSuperAdmin() || (isSignedIn() && adminHasAzienda(resource.data.azienda_id));
-    }
-
-    // CLOCK EVENTS - Timbrature
+    // 4. CLOCK EVENTS (Timbrature ingresso/uscita in tempo reale)
     match /clockEvents/{eventId} {
-      allow read, create: if true; 
-      allow update, delete: if isSuperAdmin() || (isSignedIn() && adminHasAzienda(resource.data.azienda_id));
+      allow read, create: if true;
+      allow update, delete: if isIoSviluppatore();
     }
 
-    // MATERIAL REQUESTS - Richieste materiali
+    // 5. MATERIAL REQUESTS (Richieste materiali)
     match /materialRequests/{requestId} {
       allow read, create: if true; 
-      allow update: if isSuperAdmin() || 
-                    (isSignedIn() && adminHasAzienda(resource.data.azienda_id)) ||
-                    (resource.data.status == 'draft');
-      allow delete: if isSuperAdmin() || (isSignedIn() && adminHasAzienda(resource.data.azienda_id));
+      allow update: if isIoSviluppatore() || (resource.data.status == 'draft'); 
+      allow delete: if isIoSviluppatore(); 
     }
 
-    // FEEDBACK - Segnalazioni bug e migliorie
+    // 6. FEEDBACK (Segnalazioni e migliorie dall'app)
     match /feedback/{feedbackId} {
-      allow create, read: if true;
-      allow update, delete: if isSuperAdmin();
+      allow create: if true; // Chiunque dall'app può inviare un feedback
+      allow read, update, delete: if isIoSviluppatore(); // Solo tu puoi vederli nel pannello privato
     }
 
-    // COMPANIES - Gestione aziende
-    match /companies/{aziendaId} {
-      allow get: if isSignedIn();
-      allow write: if isSuperAdmin();
-    }
-
-    // Global Deny per tutto il resto (sicurezza)
+    // Protezione globale di sicurezza per tutto il resto
     match /{document=**} {
-      allow read, write: if isSuperAdmin();
+      allow read, write: if isIoSviluppatore();
     }
   }
 }
